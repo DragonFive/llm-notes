@@ -1,0 +1,68 @@
+<svg viewBox="0 0 680 420" width="100%" role="img" xmlns="http://www.w3.org/2000/svg">
+  <title>编译器 Lowering 层次图</title>
+  <desc>展示从高层计算图到底层硬件指令的逐步 Lowering 过程</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5"
+      markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke"
+        stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </marker>
+  </defs>
+  <style>
+    .th { font: 500 14px sans-serif; fill: #2C2C2A; }
+    .ts { font: 400 12px sans-serif; fill: #5F5E5A; }
+    .caption { font: 400 11px sans-serif; fill: #888780; }
+  </style>
+
+  <!-- Layer 1: High-level Graph -->
+  <g transform="translate(0,0)">
+    <rect x="140" y="30" width="400" height="56" rx="12" stroke-width="0.5" fill="#EEEDFE" stroke="#AFA9EC"/>
+    <text class="th" x="340" y="50" text-anchor="middle" dominant-baseline="central">High-level Computation Graph</text>
+    <text class="ts" x="340" y="70" text-anchor="middle" dominant-baseline="central">Y = ReLU(MatMul(X, W) + b)</text>
+  </g>
+
+  <!-- Arrow 1 -->
+  <line x1="340" y1="86" x2="340" y2="120" stroke="#534AB7" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text class="caption" x="355" y="108">Graph Lowering</text>
+
+  <!-- Layer 2: Operator / Kernel Level -->
+  <g transform="translate(0,0)">
+    <rect x="100" y="122" width="480" height="56" rx="12" stroke-width="0.5" fill="#E6F1FB" stroke="#85B7EB"/>
+    <text class="th" x="340" y="142" text-anchor="middle" dominant-baseline="central">Operator / Kernel Level IR</text>
+    <text class="ts" x="340" y="162" text-anchor="middle" dominant-baseline="central">MatMul → BiasAdd → ReLU (算子序列 + Fusion 决策)</text>
+  </g>
+
+  <!-- Arrow 2 -->
+  <line x1="340" y1="178" x2="340" y2="212" stroke="#185FA5" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text class="caption" x="355" y="200">Operator Lowering</text>
+
+  <!-- Layer 3: Tile / Loop Level -->
+  <g transform="translate(0,0)">
+    <rect x="60" y="214" width="560" height="56" rx="12" stroke-width="0.5" fill="#E1F5EE" stroke="#5DCAA5"/>
+    <text class="th" x="340" y="234" text-anchor="middle" dominant-baseline="central">Tile / Loop Level IR</text>
+    <text class="ts" x="340" y="254" text-anchor="middle" dominant-baseline="central">Tiling 策略 + 循环嵌套 + Shared Memory/Reg 分配</text>
+  </g>
+
+  <!-- Arrow 3 -->
+  <line x1="340" y1="270" x2="340" y2="304" stroke="#0F6E56" stroke-width="1.5" marker-end="url(#arrow)"/>
+  <text class="caption" x="355" y="292">Codegen / Instruction Lowering</text>
+
+  <!-- Layer 4: Hardware Instructions -->
+  <g transform="translate(0,0)">
+    <rect x="140" y="306" width="400" height="56" rx="12" stroke-width="0.5" fill="#FAEEDA" stroke="#EF9F27"/>
+    <text class="th" x="340" y="326" text-anchor="middle" dominant-baseline="central">Hardware Instructions</text>
+    <text class="ts" x="340" y="346" text-anchor="middle" dominant-baseline="central">MMA 指令 + LD/ST + Synchronize + ...</text>
+  </g>
+
+  <!-- Right-side bracket -->
+  <line x1="630" y1="58" x2="630" y2="334" stroke="#888780" stroke-width="0.5" stroke-dasharray="4 3"/>
+  <line x1="630" y1="58" x2="640" y2="58" stroke="#888780" stroke-width="0.5"/>
+  <line x1="630" y1="334" x2="640" y2="334" stroke="#888780" stroke-width="0.5"/>
+  <text class="caption" x="648" y="190" writing-mode="tb" dominant-baseline="central">Lowering = 逐层下降</text>
+
+  <!-- Left-side annotation -->
+  <g transform="translate(30, 130)">
+    <text class="caption" x="0" y="0">抽象度 ↓</text>
+    <text class="caption" x="0" y="16">硬件细节 ↑</text>
+  </g>
+</svg>

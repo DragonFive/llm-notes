@@ -54,7 +54,7 @@ difficulty: intermediate
 
 ### 关键框图：SM 内部结构
 
-![SM 内部结构与调度层级|429](../assets/sm_scheduling_architecture.svg)
+![SM 内部结构与调度层级](../assets/sm_scheduling_architecture.svg)
 
 ### 关键对比：TBS 资源可用 vs Warp 就绪
 

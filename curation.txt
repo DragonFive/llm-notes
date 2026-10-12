@@ -1,0 +1,26 @@
+# 策展清单（curation manifest）
+#
+# 每行一个源文件，路径相对于 ob_note 根目录（$OB_BUDDY_HOME）。
+# `#` 开头为注释。tools/export.py 读取本文件：
+#   1) 拷贝 → docs/notes/   2) obsidian 语法转纯文本   3) 敏感词扫描（命中即失败）
+#   4) 拷贝被引用的 assets   5) 重写 docs/index.md 与 mkdocs.yml 的生成式 nav
+#
+# 收录标准：纯通用技术篇（GPU 调度 / Tensor Core / 编译器 / 指令级），零内部信息。
+# 不收录：含内部 MR 链接、内部环境、公司内部上下文的笔记（xllm PR 教学书等）。
+
+# —— 2026-06 批次 ——
+wiki/synthesis/2026-06-22_megakernel_vs_unfused.md
+wiki/synthesis/2026-06-22_pdl_vs_cudagraph.md
+wiki/synthesis/2026-06-23_fusion_tiling_layout.md
+wiki/synthesis/2026-06-23_pytorch_compiler_stack.md
+wiki/synthesis/2026-06-24_gpu_scheduling_deep_dive.md
+wiki/synthesis/2026-06-25_warp_scheduler_deep_dive.md
+
+# —— 2026-07 批次 ——
+wiki/synthesis/2026-06-29_async_instruction_scheduling.md
+wiki/synthesis/2026-07-02_wgmma_hopper_gemm.md
+wiki/synthesis/2026-07-04_tensor_core_ptx_pipeline.md
+wiki/synthesis/2026-07-06_mma-instruction-deep-dive.md
+wiki/synthesis/2026-07-07_gemm_ar_multimem_deep_dive.md
+wiki/synthesis/2026-07-09_inductor_ir_design.md
+wiki/synthesis/2026-07-12_inductor_fx_passes.md
