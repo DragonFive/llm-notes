@@ -1,0 +1,47 @@
+site_name: LLM Notes
+site_description: 机器学习系统学习笔记 —— GPU 调度、Tensor Core、编译器与推理框架
+site_url: https://dragonfive.github.io/llm-notes/
+repo_url: https://github.com/DragonFive/llm-notes
+repo_name: DragonFive/llm-notes
+copyright: Copyright &copy; 2026 DragonFive
+
+theme:
+  name: material
+  language: zh
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: 切换到深色模式
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: 切换到浅色模式
+  features:
+    - navigation.top
+    - navigation.footer
+    - search.highlight
+    - search.share
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.details
+
+nav:
+  - 首页: index.md
+  - 笔记:
+      - GPU 调度深潜：TBS、Warp Scheduler 与延迟隐藏: notes/2026-06-24_gpu_scheduling_deep_dive.md
+      - Warp Scheduler 深潜: notes/2026-06-25_warp_scheduler_deep_dive.md
+      - Tensor Core 与 PTX 流水线: notes/2026-07-04_tensor_core_ptx_pipeline.md
