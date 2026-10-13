@@ -18,6 +18,7 @@
 """
 
 import argparse
+import json
 import os
 import re
 import shutil
@@ -26,6 +27,8 @@ from pathlib import Path
 
 # 敏感词：命中即失败（防内部信息外泄）。只收内部标识，不收通用技术词
 # （例如"SM 内部结构"里的"内部"是正常技术表述，不能列入）。
+# 注意：人名/同事名等更私密的模式不进本表（本表在公开仓），
+# 放 vault 私有侧的 .publish-redactions/<笔记名>.json 规则里处理。
 SENSITIVE = [
     r"coding\.jd",
     r"xingyun",
@@ -45,8 +48,22 @@ SENSITIVE = [
     r"qwen3_5",
     r"\bMR[ #]?\d{2,4}\b",
     r"![0-9]{5}",
+    # 2026-10-12 脱敏升级新增：内部基础设施与内部项目代号（通用模式，不含人名）
+    r"6\.205\.\d{1,3}\.\d{1,3}",   # 内部网段 A
+    r"11\.87\.\d{1,3}\.\d{1,3}",   # 内部网段 B
+    r"/export/home",               # 内部路径
+    r"\bgpu9\d\b",                 # 内部机器名（gpu90-99）
+    r"onerec",
+    r"OneRec",
 ]
 SENSITIVE_RE = re.compile("|".join(SENSITIVE), re.IGNORECASE)
+
+# 脱敏规则（vault 私有侧，不进公开仓）：
+#   $OB_BUDDY_HOME/.publish-redactions/<笔记basename>.json
+#   格式：[{"find": "<regex>", "replace": "<替换文本>"}, ...]  按序应用。
+#   应用时机：转换之前、敏感词扫描之前（扫的是脱敏后的文本）。
+#   规则文件本身含敏感词 → 只能住在私有 vault，随 obnote-sync 同步。
+REDACTION_DIRNAME = ".publish-redactions"
 
 WIKILINK_ALIAS_RE = re.compile(r"\[\[([^\]|]*)\|([^\]]*)\]\]")   # [[A|B]] → B
 WIKILINK_PLAIN_RE = re.compile(r"\[\[([^\]]*)\]\]")              # [[A]]  → A
@@ -63,6 +80,39 @@ NAV_END = "  # END GENERATED NAV"
 def fail(msg: str) -> None:
     print(f"❌ {msg}", file=sys.stderr)
     sys.exit(1)
+
+
+def load_redactions(vault: Path, basename: str) -> list:
+    """读 vault 私有侧的脱敏规则；无规则文件返回空表。
+
+    规则住在私有 vault（$OB_BUDDY_HOME/.publish-redactions/），永不进公开仓——
+    规则文本本身含敏感词，放公开仓等于自我泄露。
+    """
+    rf = vault / REDACTION_DIRNAME / (Path(basename).stem + ".json")
+    if not rf.is_file():
+        return []
+    try:
+        rules = json.loads(rf.read_text(encoding="utf-8"))
+    except Exception as e:
+        fail(f"脱敏规则文件解析失败 {rf.name}: {e}")
+    if not isinstance(rules, list):
+        fail(f"脱敏规则必须是 JSON 数组：{rf.name}")
+    compiled = []
+    for i, r in enumerate(rules, 1):
+        if not isinstance(r, dict) or "find" not in r or "replace" not in r:
+            fail(f"脱敏规则第 {i} 条缺 find/replace 字段：{rf.name}")
+        try:
+            compiled.append((re.compile(r["find"]), str(r["replace"])))
+        except re.error as e:
+            fail(f"脱敏规则第 {i} 条正则非法：{rf.name} → {e}")
+    return compiled
+
+
+def apply_redactions(text: str, rules: list) -> str:
+    """按序应用脱敏规则（确定性：同一规则同一文本永远同一输出）。"""
+    for cre, rep in rules:
+        text = cre.sub(rep, text)
+    return text
 
 
 def read_manifest(repo: Path) -> list:
@@ -203,12 +253,16 @@ def main() -> None:
     docs_notes = repo / "docs" / "notes"
     docs_notes.mkdir(parents=True, exist_ok=True)
 
-    items, copied_assets, all_hits = [], 0, []
+    items, copied_assets, all_hits, redacted_notes = [], 0, [], []
     for rel in entries:
         src = vault / rel
         if not src.is_file():
             fail(f"清单条目不存在：{rel}")
         raw = src.read_text(encoding="utf-8")
+        rules = load_redactions(vault, src.name)
+        if rules:
+            raw = apply_redactions(raw, rules)
+            redacted_notes.append(rel)
         hits = scan(raw, rel)
         if hits:
             all_hits.append((rel, hits))
@@ -222,7 +276,7 @@ def main() -> None:
         items.append((title, slug))
 
     if all_hits:
-        print("❌ 敏感词命中，导出中止：", file=sys.stderr)
+        print("❌ 敏感词命中，导出中止（可在私有 vault 的 .publish-redactions/<笔记名>.json 写脱敏规则后重试）：", file=sys.stderr)
         for rel, hits in all_hits:
             for lineno, word, ctx in hits:
                 print(f"   {rel}:{lineno}  命中「{word}」  {ctx}", file=sys.stderr)
@@ -234,7 +288,8 @@ def main() -> None:
         write_nav(repo, items)
 
     mode = "扫描" if args.check else "导出"
-    print(f"✅ {mode}完成：{len(items)} 篇笔记，{copied_assets} 个资产更新，敏感词零命中")
+    extra = f"，{len(redacted_notes)} 篇应用了脱敏规则（{', '.join(Path(r).name for r in redacted_notes)}）" if redacted_notes else ""
+    print(f"✅ {mode}完成：{len(items)} 篇笔记，{copied_assets} 个资产更新，敏感词零命中{extra}")
 
 
 if __name__ == "__main__":
