@@ -24,3 +24,6 @@ wiki/synthesis/2026-07-06_mma-instruction-deep-dive.md
 wiki/synthesis/2026-07-07_gemm_ar_multimem_deep_dive.md
 wiki/synthesis/2026-07-09_inductor_ir_design.md
 wiki/synthesis/2026-07-12_inductor_fx_passes.md
+
+# —— 2026-10 批次(脱敏发布首例) ——
+wiki/synthesis/2026-10-10_xllm_sfadcp_dcp_decode_attention_deep_dive.md

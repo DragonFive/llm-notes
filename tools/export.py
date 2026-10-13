@@ -27,6 +27,8 @@ from pathlib import Path
 
 # 敏感词：命中即失败（防内部信息外泄）。只收内部标识，不收通用技术词
 # （例如"SM 内部结构"里的"内部"是正常技术表述，不能列入）。
+# 口径（2026-10-12 用户裁定）：xllm 与所服务的模型均开源——
+# 模型代号（glm5_next/qwen3_5/kimi_k3 等）与源码文件名/file:line **不算敏感**，不列入。
 # 注意：人名/同事名等更私密的模式不进本表（本表在公开仓），
 # 放 vault 私有侧的 .publish-redactions/<笔记名>.json 规则里处理。
 SENSITIVE = [
@@ -41,14 +43,9 @@ SENSITIVE = [
     r"910C103",
     r"maxiaolong",
     r"DragonFive",
-    r"xllm",
-    r"xLLM",
-    r"glm5_next",
-    r"kimi_k3",
-    r"qwen3_5",
     r"\bMR[ #]?\d{2,4}\b",
     r"![0-9]{5}",
-    # 2026-10-12 脱敏升级新增：内部基础设施与内部项目代号（通用模式，不含人名）
+    # 2026-10-12 脱敏升级新增：内部基础设施与内部项目代号（不含开源模型/框架名）
     r"6\.205\.\d{1,3}\.\d{1,3}",   # 内部网段 A
     r"11\.87\.\d{1,3}\.\d{1,3}",   # 内部网段 B
     r"/export/home",               # 内部路径
@@ -87,6 +84,9 @@ def load_redactions(vault: Path, basename: str) -> list:
 
     规则住在私有 vault（$OB_BUDDY_HOME/.publish-redactions/），永不进公开仓——
     规则文本本身含敏感词，放公开仓等于自我泄露。
+    每条规则：{"find": ..., "replace": ..., "literal": true?, "flags": "s"?}
+      literal=true → find 按字面匹配（内部 re.escape，写纯文本最稳）
+      flags 含 "s" → DOTALL（跨行段落整段替换用）
     """
     rf = vault / REDACTION_DIRNAME / (Path(basename).stem + ".json")
     if not rf.is_file():
@@ -101,8 +101,10 @@ def load_redactions(vault: Path, basename: str) -> list:
     for i, r in enumerate(rules, 1):
         if not isinstance(r, dict) or "find" not in r or "replace" not in r:
             fail(f"脱敏规则第 {i} 条缺 find/replace 字段：{rf.name}")
+        flags = re.DOTALL if "s" in str(r.get("flags", "")) else 0
+        pattern = re.escape(r["find"]) if r.get("literal") else r["find"]
         try:
-            compiled.append((re.compile(r["find"]), str(r["replace"])))
+            compiled.append((re.compile(pattern, flags), str(r["replace"])))
         except re.error as e:
             fail(f"脱敏规则第 {i} 条正则非法：{rf.name} → {e}")
     return compiled
@@ -124,7 +126,13 @@ def read_manifest(repo: Path) -> list:
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        entries.append(line)
+        # 支持改名发布："vault相对路径 -> 新文件名.md"
+        # （源笔记名含敏感词时，公开 slug 必须换名——文件名也是泄露面）
+        if " -> " in line:
+            rel, slug = line.split(" -> ", 1)
+            entries.append((rel.strip(), slug.strip()))
+        else:
+            entries.append((line, None))
     if not entries:
         fail("策展清单为空")
     return entries
@@ -254,10 +262,13 @@ def main() -> None:
     docs_notes.mkdir(parents=True, exist_ok=True)
 
     items, copied_assets, all_hits, redacted_notes = [], 0, [], []
-    for rel in entries:
+    for rel, slug_override in entries:
         src = vault / rel
         if not src.is_file():
             fail(f"清单条目不存在：{rel}")
+        slug = slug_override or src.name
+        if SENSITIVE_RE.search(slug):
+            fail(f"公开 slug 含敏感词：{slug}（用「路径 -> 新名.md」改名发布）")
         raw = src.read_text(encoding="utf-8")
         rules = load_redactions(vault, src.name)
         if rules:
@@ -268,7 +279,6 @@ def main() -> None:
             all_hits.append((rel, hits))
             continue
         converted = convert(raw, rel, src, vault)
-        slug = src.name
         title = extract_title(raw, src.stem)
         if not args.check:
             (docs_notes / slug).write_text(converted, encoding="utf-8")
