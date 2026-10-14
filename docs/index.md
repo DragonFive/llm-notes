@@ -6,7 +6,7 @@
 - **构建**：MkDocs-Material，GitHub Actions 推送后自动构建发布。
 - **原则**：Markdown 是 source of truth，HTML 只是派生的阅读层。
 
-## 笔记索引（14 篇）
+## 笔记索引（15 篇）
 
 - [Megakernel vs Unfused — 为什么 GPU 推理优化不能迷信"大融合"](notes/2026-06-22_megakernel_vs_unfused.md)
 - [PDL vs CUDA Graph vs Piecewise CUDA Graph — LLM 推理 kernel launch overhead 优化全景](notes/2026-06-22_pdl_vs_cudagraph.md)
@@ -22,6 +22,7 @@
 - [Inductor IR 设计精髓 — Define-by-Run、闭包组合、V.ops 虚拟化](notes/2026-07-09_inductor_ir_design.md)
 - [Inductor FX Passes — Lowering 之前的图级优化全景](notes/2026-07-12_inductor_fx_passes.md)
 - [SfaDcp:GLM-5.3-Flash decode KV 分条注意力三轮教学结算](notes/2026-10-10_xllm_sfadcp_dcp_decode_attention_deep_dive.md)
+- [深入解析 linear tail prefix cache（四代教学书结算）](notes/2026-10-13_xllm_linear_tail_prefix_cache_deep_dive.md)
 
 > 持续更新中。本站只收录纯通用技术篇；涉及内部工程细节的笔记不在范围。
 

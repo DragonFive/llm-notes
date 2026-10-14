@@ -27,3 +27,4 @@ wiki/synthesis/2026-07-12_inductor_fx_passes.md
 
 # —— 2026-10 批次(脱敏发布首例) ——
 wiki/synthesis/2026-10-10_xllm_sfadcp_dcp_decode_attention_deep_dive.md
+wiki/synthesis/2026-10-13_xllm_mr454_linear_tail_prefix_cache_deep_dive.md -> 2026-10-13_xllm_linear_tail_prefix_cache_deep_dive.md
