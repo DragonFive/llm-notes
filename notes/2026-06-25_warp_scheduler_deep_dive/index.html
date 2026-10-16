@@ -1,0 +1,2619 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="机器学习系统学习笔记 —— GPU 调度、Tensor Core、编译器与推理框架">
+      
+      
+      
+        <link rel="canonical" href="https://dragonfive.github.io/llm-notes/notes/2026-06-25_warp_scheduler_deep_dive/">
+      
+      
+        <link rel="prev" href="../2026-06-29_async_instruction_scheduling/">
+      
+      
+        <link rel="next" href="../2026-06-24_gpu_scheduling_deep_dive/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Warp Scheduler 硬件架构全解析 - LLM Notes</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#warp-scheduler" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../.." title="LLM Notes" class="md-header__button md-logo" aria-label="LLM Notes" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            LLM Notes
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Warp Scheduler 硬件架构全解析
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="切换到深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="切换到深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="切换到浅色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="切换到浅色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/DragonFive/llm-notes" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DragonFive/llm-notes
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="LLM Notes" class="md-nav__button md-logo" aria-label="LLM Notes" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    LLM Notes
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/DragonFive/llm-notes" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DragonFive/llm-notes
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    首页
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    推理系统与分布式并行
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    推理系统与分布式并行
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-10-13_xllm_linear_tail_prefix_cache_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    深入解析 linear tail prefix cache
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-10-10_xllm_sfadcp_dcp_decode_attention_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SfaDcp:decode KV 分条注意力深潜
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU Kernel 与指令级
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    GPU Kernel 与指令级
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-07_gemm_ar_multimem_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GEMM+AR 融合与 multimem 通信深潜
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-06_mma-instruction-deep-dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MMA 指令深潜：线程分配、Fragment Layout 与数据流
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-04_tensor_core_ptx_pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tensor Core PTX 指令管线全拆解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-02_wgmma_hopper_gemm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WGMMA Hopper GEMM 完整讲解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-29_async_instruction_scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    指令调度代际跃迁：从同步锁资源到异步发令枪
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Warp Scheduler 硬件架构全解析
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Warp Scheduler 硬件架构全解析
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景引入
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        前置概念解释
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="前置概念解释">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#warpgpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Warp：GPU 调度的基本单元
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#simt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SIMT 执行模型
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        核心讲解（金字塔结构）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="核心讲解（金字塔结构）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#warp-scheduler-gpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        结论先行：Warp Scheduler 是 GPU 的"心脏"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#warp-scheduler_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        展开解释：Warp Scheduler 的硬件解剖
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="展开解释：Warp Scheduler 的硬件解剖">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-instruction-fetch-unit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. 指令获取单元（Instruction Fetch Unit）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-scoreboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. 记分牌（Scoreboard）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-warp-warp-selector" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Warp 选择器 / 仲裁器（Warp Selector）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-dispatch-unit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. 发射单元（Dispatch Unit）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        深入细节：调度策略的演进
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="深入细节：调度策略的演进">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#round-robin" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round-Robin（轮询调度）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#greedy-then-oldest-gto" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Greedy-Then-Oldest (GTO)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        零开销线程切换：GPU 最被低估的硬件魔法
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="零开销线程切换：GPU 最被低估的硬件魔法">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CPU 线程切换的代价
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gpu_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GPU 如何做到零开销
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#volta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Volta 革命：独立线程调度
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Volta 革命：独立线程调度">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pre-volta-pc-32" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pre-Volta：一个 PC 控制 32 个线程
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#volta32-pc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Volta+：32 个独立 PC
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#warp-scheduler_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        异步指令时代的 Warp Scheduler
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="异步指令时代的 Warp Scheduler">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ampere-cpasync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ampere 的 cp.async
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hopper-tma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hopper 的 TMA——调度器的"终极解放"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#barrier" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        异步组与 Barrier 机制
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        数据流动的层次结构
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="数据流动的层次结构">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cpasync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cp.async 的执行粒度
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tensor-core" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tensor Core 的线程协作模式
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tensor-core_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tensor Core 的内部并行性
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        多角度追问
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="多角度追问">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#q1-warp32" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q1：为什么 Warp=32 从未改变？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q2-gpu-108-smwarp-scheduler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q2：如果 GPU 有 108 个 SM，Warp Scheduler 如何分配？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q3cpasync-16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q3：cp.async 的 16 字节限制是否浪费发射带宽？
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        边界与极端情况
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="边界与极端情况">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        分支发散的代价
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#occupancy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Occupancy 的反直觉结论
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TMA 的代价
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        参考文献 &amp; 延展学习
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        相关概念
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-24_gpu_scheduling_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU 调度深潜：TBS、Warp Scheduler 与延迟隐藏的完整拆解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-23_pytorch_compiler_stack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch 编译栈与 Lowering 层次映射
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-23_fusion_tiling_layout/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fusion / Tiling / Layout 三元组
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-22_pdl_vs_cudagraph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PDL vs CUDA Graph vs Piecewise CUDA Graph — LLM 推理 kernel launch overhead 优化全景
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-22_megakernel_vs_unfused/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Megakernel vs Unfused — 为什么 GPU 推理优化不能迷信"大融合"
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    编译器与图优化
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    编译器与图优化
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-12_inductor_fx_passes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inductor FX Passes — Lowering 之前的图级优化全景
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-09_inductor_ir_design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inductor IR 设计精髓 — Define-by-Run、闭包组合、V.ops 虚拟化
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景引入
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        前置概念解释
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="前置概念解释">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#warpgpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Warp：GPU 调度的基本单元
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#simt" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        SIMT 执行模型
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        核心讲解（金字塔结构）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="核心讲解（金字塔结构）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#warp-scheduler-gpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        结论先行：Warp Scheduler 是 GPU 的"心脏"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#warp-scheduler_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        展开解释：Warp Scheduler 的硬件解剖
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="展开解释：Warp Scheduler 的硬件解剖">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-instruction-fetch-unit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. 指令获取单元（Instruction Fetch Unit）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-scoreboard" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. 记分牌（Scoreboard）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-warp-warp-selector" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Warp 选择器 / 仲裁器（Warp Selector）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-dispatch-unit" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. 发射单元（Dispatch Unit）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        深入细节：调度策略的演进
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="深入细节：调度策略的演进">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#round-robin" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Round-Robin（轮询调度）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#greedy-then-oldest-gto" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Greedy-Then-Oldest (GTO)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#gpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        零开销线程切换：GPU 最被低估的硬件魔法
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="零开销线程切换：GPU 最被低估的硬件魔法">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cpu" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CPU 线程切换的代价
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#gpu_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GPU 如何做到零开销
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#volta" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Volta 革命：独立线程调度
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Volta 革命：独立线程调度">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pre-volta-pc-32" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pre-Volta：一个 PC 控制 32 个线程
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#volta32-pc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Volta+：32 个独立 PC
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#warp-scheduler_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        异步指令时代的 Warp Scheduler
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="异步指令时代的 Warp Scheduler">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ampere-cpasync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ampere 的 cp.async
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hopper-tma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Hopper 的 TMA——调度器的"终极解放"
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#barrier" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        异步组与 Barrier 机制
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        数据流动的层次结构
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="数据流动的层次结构">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#cpasync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cp.async 的执行粒度
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tensor-core" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tensor Core 的线程协作模式
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tensor-core_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tensor Core 的内部并行性
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        多角度追问
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="多角度追问">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#q1-warp32" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q1：为什么 Warp=32 从未改变？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q2-gpu-108-smwarp-scheduler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q2：如果 GPU 有 108 个 SM，Warp Scheduler 如何分配？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q3cpasync-16" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q3：cp.async 的 16 字节限制是否浪费发射带宽？
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        边界与极端情况
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="边界与极端情况">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        分支发散的代价
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#occupancy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Occupancy 的反直觉结论
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TMA 的代价
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        参考文献 &amp; 延展学习
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        相关概念
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="warp-scheduler">Warp Scheduler 硬件架构全解析<a class="headerlink" href="#warp-scheduler" title="Permanent link">&para;</a></h1>
+<h2 id="_1">场景引入<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>你有没有想过——为什么 GPU 拥有上万个线程，却可以在一个时钟周期内无缝切换？为什么一条全局内存访问指令要等 600 个周期，但 GPU 的计算吞吐量依然爆表？</p>
+<p>答案藏在 SM 内部一个不起眼、却至关重要的硬件单元里——<strong>Warp Scheduler</strong>（Warp 调度器）。</p>
+<hr />
+<h2 id="_2">前置概念解释<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<p>在深入 Warp Scheduler 之前，我们需要理解几个核心概念：</p>
+<h3 id="warpgpu">Warp：GPU 调度的基本单元<a class="headerlink" href="#warpgpu" title="Permanent link">&para;</a></h3>
+<p><strong>Warp 是 GPU 硬件调度的最小粒度。</strong> 一个 Warp 固定包含 32 个线程，这个数字从 Fermi（2010）到 Blackwell（2024）从未改变——它是 NVIDIA CUDA 生态的基石常数。</p>
+<p><strong>为什么是 32？</strong> 这是 SIMD 宽度和线程管理开销之间的工程权衡：</p>
+<table>
+<thead>
+<tr>
+<th>设计选择</th>
+<th>数据总量</th>
+<th>硬件效率</th>
+<th>主要问题</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Warp=16</td>
+<td>512 bits</td>
+<td>50%</td>
+<td>调度开销较高</td>
+</tr>
+<tr>
+<td><strong>Warp=32</strong></td>
+<td><strong>1024 bits</strong></td>
+<td><strong>100%</strong></td>
+<td><strong>最优平衡</strong></td>
+</tr>
+<tr>
+<td>Warp=64</td>
+<td>2048 bits</td>
+<td>50%</td>
+<td>分支发散代价翻倍</td>
+</tr>
+</tbody>
+</table>
+<blockquote>
+<p>[!insight] 黄金对齐
+32 个线程 × 32-bit 寄存器 = 1024-bit 数据路径，<strong>刚好匹配 SM 内部互连宽度</strong>。这是硬件设计中的"黄金对齐"——数据总线的物理宽度与 Warp 的数据需求完美对齐。</p>
+</blockquote>
+<h3 id="simt">SIMT 执行模型<a class="headerlink" href="#simt" title="Permanent link">&para;</a></h3>
+<p>NVIDIA 定义了 <strong>SIMT（Single Instruction, Multiple Threads）</strong> 而非传统的 SIMD：</p>
+<ul>
+<li><strong>SIMD（CPU）</strong>：一条指令操作一个向量寄存器</li>
+<li><strong>SIMT（GPU）</strong>：一条指令操作 32 个标量线程，但硬件自动包装成 Warp</li>
+</ul>
+<p><strong>关键差异</strong>：程序员写的是标量代码，硬件自动把 32 个线程包装成一个 Warp。</p>
+<hr />
+<h2 id="_3">核心讲解（金字塔结构）<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<h3 id="warp-scheduler-gpu">结论先行：Warp Scheduler 是 GPU 的"心脏"<a class="headerlink" href="#warp-scheduler-gpu" title="Permanent link">&para;</a></h3>
+<p><strong>Warp Scheduler 是 SM 内部的指令发射调度单元</strong>，它决定了 SM 每个时钟周期向执行单元发出哪些指令。它是 GPU 实现"吞吐量优先"哲学的核心硬件——没有它，GPU 的并行计算优势无从谈起。</p>
+<p><strong>核心能力</strong>：
+- 零开销线程切换
+- 延迟隐藏
+- 记分牌依赖追踪
+- 异步指令协调</p>
+<hr />
+<h3 id="warp-scheduler_1">展开解释：Warp Scheduler 的硬件解剖<a class="headerlink" href="#warp-scheduler_1" title="Permanent link">&para;</a></h3>
+<p>一个 Warp Scheduler 由四个核心子单元组成：</p>
+<h4 id="1-instruction-fetch-unit">1. 指令获取单元（Instruction Fetch Unit）<a class="headerlink" href="#1-instruction-fetch-unit" title="Permanent link">&para;</a></h4>
+<ul>
+<li>每个 Warp 有独立的 <strong>I-Buffer（指令缓冲）</strong>，深度 4-8 条指令</li>
+<li>当 I-Buffer 快空时，从 I-Cache 预取指令</li>
+<li><strong>为什么每个 Warp 需要独立 I-Buffer？</strong> 不同 Warp 可以执行不同的程序位置</li>
+</ul>
+<h4 id="2-scoreboard">2. 记分牌（Scoreboard）<a class="headerlink" href="#2-scoreboard" title="Permanent link">&para;</a></h4>
+<p><strong>调度器中最关键的"依赖追踪引擎"</strong>。职责：判断每个 Warp 当前是否可以发射下一条指令。</p>
+<p>追踪内容：
+- 每条指令的源操作数寄存器是否就绪
+- 目标操作数寄存器是否空闲
+- 是否有未完成的内存加载等待</p>
+<p><strong>Nsight Compute 关键指标</strong>：
+- <code>long_scoreboard</code>：Warp 因等待全局内存而停滞的占比（通常 20-60%）
+- <code>short_scoreboard</code>：Warp 因等待共享内存而停滞的占比（通常 5-15%）</p>
+<blockquote>
+<p>[!tip] 诊断决策
+如果 <code>long_scoreboard &gt; 40%</code>，你的 kernel 基本确定是访存瓶颈。</p>
+</blockquote>
+<h4 id="3-warp-warp-selector">3. Warp 选择器 / 仲裁器（Warp Selector）<a class="headerlink" href="#3-warp-warp-selector" title="Permanent link">&para;</a></h4>
+<p>在每个时钟周期从管理的 Warp 池中选出"最合适"的一个：</p>
+<ol>
+<li>检查所有 Warp 的记分牌状态</li>
+<li>过滤出"就绪可发射"的 Warp</li>
+<li>根据调度策略选择其中一个</li>
+<li>取出该 Warp 的下一条指令，送入 Dispatch Unit</li>
+</ol>
+<p><strong>关键特性</strong>：整个过程在 <strong>1 个时钟周期</strong> 内完成——纯硬件实现，无微码、无操作系统参与。</p>
+<h4 id="4-dispatch-unit">4. 发射单元（Dispatch Unit）<a class="headerlink" href="#4-dispatch-unit" title="Permanent link">&para;</a></h4>
+<p>选中的指令进入后：
+- 确认执行单元空闲（FP32/INT32/Tensor Core/SFU/Load-Store）
+- 从寄存器文件收集源操作数
+- 将 32 线程的指令拆分为执行单元可处理的粒度</p>
+<hr />
+<h3 id="_4">深入细节：调度策略的演进<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<p>NVIDIA 从未正式公开每一代的确切策略，但学术界通过微基准测试逆向出几种模式：</p>
+<h4 id="round-robin">Round-Robin（轮询调度）<a class="headerlink" href="#round-robin" title="Permanent link">&para;</a></h4>
+<p><strong>Fermi 和早期 Kepler 使用</strong>。</p>
+<ul>
+<li><strong>优势</strong>：逻辑简单，功耗极低，公平性好</li>
+<li><strong>劣势</strong>：不区分 Warp 的"年龄"——等了很久的 Warp 和刚发射完的 Warp 有同等优先</li>
+</ul>
+<h4 id="greedy-then-oldest-gto">Greedy-Then-Oldest (GTO)<a class="headerlink" href="#greedy-then-oldest-gto" title="Permanent link">&para;</a></h4>
+<p><strong>Maxwell 之后主流策略</strong>。</p>
+<ol>
+<li><strong>优先发射同一 Warp 的连续指令</strong>（Greedy 阶段）——如果当前 Warp 的下一条指令已就绪，直接发射</li>
+<li><strong>当当前 Warp 停滞时，选择"最老"的就绪 Warp</strong>（Oldest 阶段）</li>
+</ol>
+<p><strong>为什么更好？</strong>
+- 减少 Warp 切换开销（I-Cache 局部性更好）
+- "最老优先"保证没有 Warp 被饿死
+- 对计算密集 kernel，Greedy 减少无效轮转</p>
+<table>
+<thead>
+<tr>
+<th>架构</th>
+<th>调度策略</th>
+<th>特点</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fermi</td>
+<td>Round-Robin</td>
+<td>简单公平，2 Scheduler/SM</td>
+</tr>
+<tr>
+<td>Kepler</td>
+<td>Round-Robin + 优先级</td>
+<td>Quad Scheduler，双发射</td>
+</tr>
+<tr>
+<td>Maxwell</td>
+<td>GTO</td>
+<td>能效优先，单发射</td>
+</tr>
+<tr>
+<td>Volta</td>
+<td>GTO + 独立线程调度</td>
+<td>革命性变化</td>
+</tr>
+<tr>
+<td>Ampere</td>
+<td>GTO</td>
+<td>引入 cp.async</td>
+</tr>
+<tr>
+<td>Hopper</td>
+<td>GTO + TMA</td>
+<td>异步硬件引擎协调</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="gpu">零开销线程切换：GPU 最被低估的硬件魔法<a class="headerlink" href="#gpu" title="Permanent link">&para;</a></h2>
+<h3 id="cpu">CPU 线程切换的代价<a class="headerlink" href="#cpu" title="Permanent link">&para;</a></h3>
+<p>CPU 的上下文切换需要：
+- 保存/加载寄存器（~32-128 个通用寄存器 + 浮点/SIMD）
+- 刷新 TLB
+- 切换页表基地址
+- <strong>总开销：数百到数千个 CPU 周期</strong></p>
+<h3 id="gpu_1">GPU 如何做到零开销<a class="headerlink" href="#gpu_1" title="Permanent link">&para;</a></h3>
+<p><strong>秘密在于每个 Warp 的状态在硬件中是"常驻"的。</strong></p>
+<p>关键设计：
+1. <strong>寄存器文件预分配</strong>：Warp 的寄存器从"出生"到"死亡"始终占用固定的物理寄存器区域。切换 Warp 只是改变调度器指向的寄存器基地址——不涉及任何数据搬移。
+2. <strong>每个 Warp 独立 PC</strong>：Volta+ 架构中，每个 Warp 的 32 个线程各有独立 PC。
+3. <strong>无页表切换</strong>：同一 SM 内的所有 Warp 共享同一个地址空间。</p>
+<p><strong>结果</strong>：
+- 典型寄存器读取延迟：~6-8 cycles
+- Warp 切换只需 <strong>1 cycle</strong>——下一个周期就可以从新 Warp 发射指令</p>
+<blockquote>
+<p>[!insight] 延迟隐藏的数学必然
+如果每条指令平均需要 20 cycles，而每 4 cycles 可以发射一条指令，那么需要 <strong>5 个活跃 Warp</strong> 才能隐藏延迟。这就是为什么 Occupancy 不需要 100%——25-50% 的 Occupancy（16-32 个 Warp/SM）就足以隐藏延迟。</p>
+</blockquote>
+<hr />
+<h2 id="volta">Volta 革命：独立线程调度<a class="headerlink" href="#volta" title="Permanent link">&para;</a></h2>
+<h3 id="pre-volta-pc-32">Pre-Volta：一个 PC 控制 32 个线程<a class="headerlink" href="#pre-volta-pc-32" title="Permanent link">&para;</a></h3>
+<p>在 Pascal 及更早架构中，一个 Warp 只有一个程序计数器（PC）。遇到分支时：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="k">if</span><span class="w"> </span><span class="p">(</span><span class="n">threadIdx</span><span class="p">.</span><span class="n">x</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="mi">16</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">    </span><span class="n">A</span><span class="p">();</span><span class="w">  </span><span class="c1">// 16 threads 活跃</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="p">}</span><span class="w"> </span><span class="k">else</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">    </span><span class="n">B</span><span class="p">();</span><span class="w">  </span><span class="c1">// 16 threads 活跃</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="p">}</span>
+</code></pre></div>
+<p>硬件使用 <strong>SIMT Stack</strong> 管理：
+1. 先执行 A 路径（active mask = 0x0000FFFF）
+2. Push B 路径到 SIMT Stack
+3. A 完成后，Pop 出 B 路径执行
+4. 两路收敛</p>
+<p><strong>问题</strong>：SIMT Stack 深度有限（4-6 层），嵌套分支过多会导致栈溢出。</p>
+<h3 id="volta32-pc">Volta+：32 个独立 PC<a class="headerlink" href="#volta32-pc" title="Permanent link">&para;</a></h3>
+<p><strong>每个线程拥有独立的 PC 和调用栈</strong>：
+- 同一 Warp 内的不同线程可以执行不同指令路径
+- 不再需要 SIMT Stack 做 push/pop
+- 分支发散的执行可以交错进行
+- <strong>必须显式使用 <code>__syncwarp()</code></strong> 保证 Warp 内线程同步</p>
+<blockquote>
+<p>[!warning] 向后兼容性破坏
+Volta 的独立线程调度改变了隐式同步语义。旧代码中隐式依赖 warp 同步的地方需要显式声明 <code>__syncwarp()</code>。</p>
+</blockquote>
+<hr />
+<h2 id="warp-scheduler_2">异步指令时代的 Warp Scheduler<a class="headerlink" href="#warp-scheduler_2" title="Permanent link">&para;</a></h2>
+<h3 id="ampere-cpasync">Ampere 的 cp.async<a class="headerlink" href="#ampere-cpasync" title="Permanent link">&para;</a></h3>
+<p><strong>传统数据搬运路径</strong>：全局内存 → 寄存器 → 共享内存，每一步都需要 Warp Scheduler 发射指令。</p>
+<p><strong>cp.async 改变</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1">// 传统方式：Warp 等待全程</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="kt">float</span><span class="w"> </span><span class="n">reg</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">gmem</span><span class="p">[</span><span class="n">idx</span><span class="p">];</span><span class="w">  </span><span class="c1">// Warp 停滞等待</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="n">smem</span><span class="p">[</span><span class="n">idx</span><span class="p">]</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="n">reg</span><span class="p">;</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="c1">// cp.async：Warp 不等待</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="k">asm</span><span class="p">(</span><span class="s">"cp.async.ca.shared.global [%0], [%1], %2;"</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">    </span><span class="o">::</span><span class="w"> </span><span class="s">"r"</span><span class="p">(</span><span class="n">smem_ptr</span><span class="p">),</span><span class="w"> </span><span class="s">"l"</span><span class="p">(</span><span class="n">gmem_ptr</span><span class="p">),</span><span class="w"> </span><span class="s">"n"</span><span class="p">(</span><span class="mi">16</span><span class="p">));</span>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="c1">// Warp Scheduler 可以立即切换到其他 Warp</span>
+</code></pre></div>
+<p><strong>关键改进</strong>：
+- cp.async 被送入专用的异步复制引擎
+- 每条指令搬运 <strong>16 字节</strong>（固定）
+- Scheduler 可以立即切换到其他 Warp</p>
+<p><strong>"解放"体现在</strong>：
+- 解放了 <strong>Warp 的停滞时间</strong> → 可以立即做其他事
+- 但 <strong>没有解放 Scheduler 的发射带宽</strong> → 仍需发射大量指令</p>
+<blockquote>
+<p>[!example] 128KB 数据搬运需要多少条指令？
+假设 Block 大小 = 128 线程：
+- 每个线程搬运：128KB ÷ 128 = 1KB = 1024 字节
+- 每个线程需要指令数：1024 ÷ 16 = 64 条
+- 整个 Block：128 × 64 = <strong>8192 条 cp.async 指令</strong></p>
+</blockquote>
+<h3 id="hopper-tma">Hopper 的 TMA——调度器的"终极解放"<a class="headerlink" href="#hopper-tma" title="Permanent link">&para;</a></h3>
+<p><strong>TMA 走得更远</strong>：甚至不占用 Warp Scheduler 的发射槽。</p>
+<p>一个单独的硬件单元（TMA 控制器）负责：
+- 解析多维张量描述符
+- 处理边界条件和填充
+- 执行全局内存 ↔ 共享内存的批量传输
+- 完成后触发异步 barrier</p>
+<p><strong>Warp Scheduler 只需</strong>：
+1. 发射 <strong>1 条</strong> TMA 触发指令
+2. 立即切换到其他 Warp 做计算
+3. TMA 在后台完全自主运作
+4. 完成时通过 barrier 通知 Warp</p>
+<blockquote>
+<p>[!insight] 真正的"解放"
+- <strong>cp.async</strong>：解放 Warp 停滞时间，但 Scheduler 仍需发射大量指令
+- <strong>TMA</strong>：解放 Scheduler 发射带宽——1 条指令完成整个传输</p>
+<p>在 TMA 传输 128KB 数据的整个过程中，Warp Scheduler 可以持续发射计算指令，完全不受访存影响。</p>
+</blockquote>
+<h3 id="barrier">异步组与 Barrier 机制<a class="headerlink" href="#barrier" title="Permanent link">&para;</a></h3>
+<p><strong>关键概念</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>追踪粒度</th>
+<th>管理者</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>传统同步加载</strong></td>
+<td>每个内存操作</td>
+<td>Scheduler 记分牌</td>
+</tr>
+<tr>
+<td><strong>cp.async 异步组</strong></td>
+<td>一批 cp.async 指令</td>
+<td><strong>软件</strong>（<code>commit_group</code>）</td>
+</tr>
+<tr>
+<td><strong>TMA barrier</strong></td>
+<td>整个传输操作</td>
+<td><strong>硬件</strong>（TMA 控制器）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>异步组示例</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1">// 发射一组 cp.async 指令</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="k">for</span><span class="w"> </span><span class="p">(</span><span class="kt">int</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">=</span><span class="w"> </span><span class="mi">0</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="w"> </span><span class="o">&lt;</span><span class="w"> </span><span class="n">N</span><span class="p">;</span><span class="w"> </span><span class="n">i</span><span class="o">++</span><span class="p">)</span><span class="w"> </span><span class="p">{</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="w">    </span><span class="n">cp_async</span><span class="p">(</span><span class="n">dst</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="o">*</span><span class="mi">16</span><span class="p">,</span><span class="w"> </span><span class="n">src</span><span class="w"> </span><span class="o">+</span><span class="w"> </span><span class="n">i</span><span class="o">*</span><span class="mi">16</span><span class="p">);</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="p">}</span>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="c1">// 提交组（软件管理）</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="n">cp_async_commit_group</span><span class="p">();</span>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1">// 等待组完成</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="n">cp_async_wait_group</span><span class="o">&lt;</span><span class="n">NUM_STAGES</span><span class="w"> </span><span class="o">-</span><span class="w"> </span><span class="mi">1</span><span class="o">&gt;</span><span class="p">();</span>
+</code></pre></div>
+<p><strong>Scheduler 只追踪"异步组是否完成"，不追踪组内每条指令。</strong></p>
+<hr />
+<h2 id="_5">数据流动的层次结构<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<h3 id="cpasync">cp.async 的执行粒度<a class="headerlink" href="#cpasync" title="Permanent link">&para;</a></h3>
+<p><strong>关键洞察</strong>：cp.async 是"每个线程"执行的。</p>
+<p>当 Warp 执行 cp.async 时：
+- 32 个线程，每个发射 <strong>1 条</strong> cp.async 指令
+- 每条指令搬运 <strong>16 字节</strong>（128 bits）
+- 整个 Warp 同时搬运：<strong>32 × 16 字节 = 512 字节</strong></p>
+<h3 id="tensor-core">Tensor Core 的线程协作模式<a class="headerlink" href="#tensor-core" title="Permanent link">&para;</a></h3>
+<p><strong>关键概念</strong>：Tensor Core 操作是 Warp 级指令，<strong>32 个线程协同工作</strong>，而不是"一个线程独占"。</p>
+<table>
+<thead>
+<tr>
+<th>执行单元</th>
+<th>指令类型</th>
+<th>线程参与模式</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>32 个 CUDA Core</strong></td>
+<td>普通指令（add, mul）</td>
+<td>32 个线程独立执行</td>
+</tr>
+<tr>
+<td><strong>1 个 Tensor Core</strong></td>
+<td>Warp 级指令（mma.sync）</td>
+<td>32 个线程协同执行</td>
+</tr>
+<tr>
+<td><strong>共享内存加载单元</strong></td>
+<td>Warp 级指令（ldmatrix）</td>
+<td>32 个线程协同加载</td>
+</tr>
+</tbody>
+</table>
+<p><strong>ldmatrix 的线程分工</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1">// 加载一个 16×16 矩阵</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="k">asm</span><span class="p">(</span><span class="s">"ldmatrix.sync.aligned.m8n8.x4.shared.b16"</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">    </span><span class="s">"{%0, %1, %2, %3}, [%4];"</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">    </span><span class="o">:</span><span class="w"> </span><span class="s">"=r"</span><span class="p">(</span><span class="n">frag</span><span class="p">[</span><span class="mi">0</span><span class="p">]),</span><span class="w"> </span><span class="s">"=r"</span><span class="p">(</span><span class="n">frag</span><span class="p">[</span><span class="mi">1</span><span class="p">]),</span><span class="w"> </span><span class="s">"=r"</span><span class="p">(</span><span class="n">frag</span><span class="p">[</span><span class="mi">2</span><span class="p">]),</span><span class="w"> </span><span class="s">"=r"</span><span class="p">(</span><span class="n">frag</span><span class="p">[</span><span class="mi">3</span><span class="p">])</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">    </span><span class="o">:</span><span class="w"> </span><span class="s">"r"</span><span class="p">(</span><span class="n">smem_addr</span><span class="p">));</span>
+</code></pre></div>
+<ul>
+<li>Thread 0-7：加载第 1 行（8 个 bfloat16）</li>
+<li>Thread 8-15：加载第 2 行</li>
+<li>Thread 16-23：加载第 3 行</li>
+<li>Thread 24-31：加载第 4 行</li>
+</ul>
+<p><strong>每个线程加载 8 个 bfloat16 = 128 bits，总共 32 个 bfloat16，由 32 个线程分担。</strong></p>
+<h3 id="tensor-core_1">Tensor Core 的内部并行性<a class="headerlink" href="#tensor-core_1" title="Permanent link">&para;</a></h3>
+<p>Tensor Core 内部有多个处理单元，可以同时处理 32 个线程贡献的数据：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>输入 A（32 个线程贡献的数据片段）
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    ↓
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>┌─────────────────────────────────┐
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>│  Tensor Core                    │
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>│  ┌──────┐  ┌──────┐  ┌──────┐  │
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>│  │ PE 0 │  │ PE 1 │  │ ...  │  │ ← 多个并行处理单元
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>│  └──────┘  └──────┘  └──────┘  │
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>│    ↓          ↓          ↓      │
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>│  [部分积累加和融合]              │
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>└─────────────────────────────────┘
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>    ↓
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>输出 C（32 个线程各自持有部分结果）
+</code></pre></div>
+<hr />
+<h2 id="_6">多角度追问<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<h3 id="q1-warp32">Q1：为什么 Warp=32 从未改变？<a class="headerlink" href="#q1-warp32" title="Permanent link">&para;</a></h3>
+<p><strong>技术原因</strong>：
+- <strong>硬件成本</strong>：改变 Warp 大小需要重新设计数据总线宽度、寄存器文件布局、调度器逻辑
+- <strong>向后兼容性</strong>：所有 CUDA 代码、编译器优化、算法设计全部围绕 Warp=32 展开
+- <strong>工程权衡</strong>：32 已证明是最优平衡点，改变它带来的收益不足以覆盖成本</p>
+<h3 id="q2-gpu-108-smwarp-scheduler">Q2：如果 GPU 有 108 个 SM，Warp Scheduler 如何分配？<a class="headerlink" href="#q2-gpu-108-smwarp-scheduler" title="Permanent link">&para;</a></h3>
+<p><strong>双层调度机制</strong>：</p>
+<ol>
+<li><strong>TBS（Thread Block Scheduler）</strong>：决定 Block 分配到哪个 SM</li>
+<li><strong>Warp Scheduler</strong>：在 SM 内部，决定哪个 Warp 发射指令</li>
+</ol>
+<p><strong>一个 SM 可以同时驻留多个 Warp</strong>（Ampere 最多 64 个 Warp / SM），Scheduler 在它们之间切换。</p>
+<h3 id="q3cpasync-16">Q3：cp.async 的 16 字节限制是否浪费发射带宽？<a class="headerlink" href="#q3cpasync-16" title="Permanent link">&para;</a></h3>
+<p><strong>是的，这就是为什么需要 TMA</strong>。</p>
+<table>
+<thead>
+<tr>
+<th>机制</th>
+<th>搬运 128KB 需要的指令数</th>
+<th>Scheduler 参与</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>传统同步加载</td>
+<td>~16000 条</td>
+<td>持续发射 + 等待</td>
+</tr>
+<tr>
+<td>cp.async</td>
+<td>~8000 条</td>
+<td>持续发射（但不等待）</td>
+</tr>
+<tr>
+<td>TMA</td>
+<td><strong>1 条</strong></td>
+<td>只在开始和结束参与</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_7">边界与极端情况<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h2>
+<h3 id="_8">分支发散的代价<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h3>
+<p>如果 Warp 内所有 32 个线程都走不同路径：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>if (tid % 32 == 0) {
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    path_0();
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>} else if (tid % 32 == 1) {
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    path_1();
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>}
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>// ... 32 个分支
+</code></pre></div>
+<p><strong>Pre-Volta</strong>：SIMT Stack 深度有限，嵌套分支可能溢出。</p>
+<p><strong>Volta+</strong>：理论上可以处理，但性能会退化到接近串行。</p>
+<h3 id="occupancy">Occupancy 的反直觉结论<a class="headerlink" href="#occupancy" title="Permanent link">&para;</a></h3>
+<p><strong>高 Occupancy 不总是最优的。</strong></p>
+<ul>
+<li><strong>计算密集型</strong>：25-50% Occupancy 足够，留寄存器给指令级并行</li>
+<li><strong>访存密集型</strong>：需要 50-100% Occupancy 来隐藏延迟</li>
+<li><strong>分支密集型</strong>：50-75% Occupancy 最佳</li>
+</ul>
+<p><strong>经验法则</strong>：当寄存器压力过大导致 spill（溢出到 L1/L2），可能得不偿失。</p>
+<h3 id="tma">TMA 的代价<a class="headerlink" href="#tma" title="Permanent link">&para;</a></h3>
+<p>既然 TMA 这么好，为什么不把所有操作都做成 TMA？</p>
+<p><strong>潜在问题</strong>：
+1. <strong>硬件成本</strong>：需要独立的 TMA 控制器、张量描述符解析器
+2. <strong>灵活性</strong>：只能处理特定的数据模式（张量形状、连续/分块访问）
+3. <strong>延迟</strong>：启动 TMA 本身有一定开销，小数据量可能不如直接加载
+4. <strong>编程复杂度</strong>：需要显式管理异步组和 barrier</p>
+<hr />
+<h2 id="_9">参考文献 &amp; 延展学习<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>来源</th>
+<th>类型</th>
+<th>难度</th>
+<th>链接</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>GPU Warp Scheduler 硬件架构全解析（知乎）</td>
+<td>blog</td>
+<td>intermediate</td>
+<td>https://zhuanlan.zhihu.com/p/2053030307369050357</td>
+</tr>
+<tr>
+<td>NVIDIA Fermi ~ Blackwell Architecture Whitepapers</td>
+<td>官方文档</td>
+<td>advanced</td>
+<td>NVIDIA 官网</td>
+</tr>
+<tr>
+<td>Demystifying GPU Microarchitecture through Microbenchmarking</td>
+<td>论文</td>
+<td>advanced</td>
+<td>Wong, H. et al. (2010)</td>
+</tr>
+<tr>
+<td>Dissecting the NVIDIA Volta GPU Architecture via Microbenchmarking</td>
+<td>论文</td>
+<td>advanced</td>
+<td>Jia, Z. et al. (2018)</td>
+</tr>
+<tr>
+<td>CUDA C++ Programming Guide (v12.x)</td>
+<td>官方文档</td>
+<td>intermediate</td>
+<td>NVIDIA 官网</td>
+</tr>
+<tr>
+<td>Asynchronous Pipelining with cp.async</td>
+<td>blog</td>
+<td>intermediate</td>
+<td>https://deepwiki.com/gau-nernst/learn-cuda/6.2-asynchronous-pipelining-with-cp.async</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_10">相关概念<a class="headerlink" href="#_10" title="Permanent link">&para;</a></h2>
+<ul>
+<li>GPU 硬件调度 — GPU 双层调度机制：TBS 和 Warp Scheduler</li>
+<li>2026-06-24_occupancy — SM 驻留 Warp 占比，衡量延迟隐藏空间</li>
+<li>2026-06-25_warp_divergence — SIMT 锁步下的分支串行化问题</li>
+<li>2026-06-25_register_blocking — 数据钉在寄存器复用的优化技术</li>
+<li>2026-06-22_cuda_graph_piecewise — vLLM 0.6+ 主流方案的 kernel 优化</li>
+</ul>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  回到页面顶部
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="页脚" >
+        
+          
+          <a href="../2026-06-29_async_instruction_scheduling/" class="md-footer__link md-footer__link--prev" aria-label="上一页: 指令调度代际跃迁：从同步锁资源到异步发令枪">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                上一页
+              </span>
+              <div class="md-ellipsis">
+                指令调度代际跃迁：从同步锁资源到异步发令枪
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../2026-06-24_gpu_scheduling_deep_dive/" class="md-footer__link md-footer__link--next" aria-label="下一页: GPU 调度深潜：TBS、Warp Scheduler 与延迟隐藏的完整拆解">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                下一页
+              </span>
+              <div class="md-ellipsis">
+                GPU 调度深潜：TBS、Warp Scheduler 与延迟隐藏的完整拆解
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2026 DragonFive
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.footer", "search.highlight", "search.share", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

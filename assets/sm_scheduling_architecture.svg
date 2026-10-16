@@ -1,0 +1,92 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 480">
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+      <polygon points="0 0, 8 3, 0 6" fill="#E74C3C"/>
+    </marker>
+    <marker id="arrow-down" markerWidth="8" markerHeight="6" refX="4" refY="6" orient="auto">
+      <polygon points="0 0, 4 6, 8 0" fill="#333"/>
+    </marker>
+    <linearGradient id="tbsGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#3498DB;stop-opacity:0.15"/>
+      <stop offset="100%" style="stop-color:#2980B9;stop-opacity:0.08"/>
+    </linearGradient>
+    <linearGradient id="warpGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#27AE60;stop-opacity:0.15"/>
+      <stop offset="100%" style="stop-color:#1E8449;stop-opacity:0.08"/>
+    </linearGradient>
+    <filter id="shadow">
+      <feDropShadow dx="1" dy="2" stdDeviation="2" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="680" height="480" rx="10" fill="#FAFBFC"/>
+
+  <!-- Title -->
+  <text x="340" y="35" text-anchor="middle" font-family="sans-serif" font-size="18" font-weight="bold" fill="#2C3E50">
+    GPU 调度层级：TBS 与 Warp Scheduler
+  </text>
+
+  <!-- Layer 1: TBS -->
+  <rect x="20" y="60" width="640" height="130" rx="8" fill="url(#tbsGrad)" stroke="#3498DB" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="340" y="88" text-anchor="middle" font-family="sans-serif" font-size="15" font-weight="bold" fill="#2C3E50">第一层：Thread Block Scheduler</text>
+  <text x="340" y="108" text-anchor="middle" font-family="sans-serif" font-size="11" fill="#555">
+    全局调度器，决定 Block 分配到哪个 SM。只看物理容量（寄存器 / 共享内存 / Warp 上限），不管 SM 上的 Warp 在等不等数据。
+  </text>
+  <text x="340" y="128" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#888">
+    策略：最多空间策略 → 优先分配给能容纳最多 Block 的 SM
+  </text>
+
+  <!-- Arrow TBS to SM -->
+  <line x1="160" y1="195" x2="160" y2="230" stroke="#3498DB" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="6,3"/>
+  <line x1="340" y1="195" x2="340" y2="230" stroke="#3498DB" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="6,3"/>
+  <line x1="520" y1="195" x2="520" y2="230" stroke="#3498DB" stroke-width="2" marker-end="url(#arrow)" stroke-dasharray="6,3"/>
+
+  <!-- SM 0 -->
+  <rect x="40" y="235" width="180" height="100" rx="8" fill="url(#warpGrad)" stroke="#27AE60" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="130" y="260" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#1E8449">SM 0</text>
+  <text x="130" y="280" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#555">Warp Scheduler 0-3</text>
+  <text x="130" y="298" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#888">4 Dispatch Unit • Scoreboard</text>
+  <text x="130" y="316" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#888">Tensor Core ×4 • CUDA Core ×128</text>
+
+  <!-- SM 1 -->
+  <rect x="250" y="235" width="180" height="100" rx="8" fill="url(#warpGrad)" stroke="#27AE60" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="340" y="260" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#1E8449">SM 1</text>
+  <text x="340" y="280" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#555">Warp Scheduler 0-3</text>
+  <text x="340" y="298" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#888">4 Dispatch Unit • Scoreboard</text>
+  <text x="340" y="316" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#888">Tensor Core ×4 • CUDA Core ×128</text>
+
+  <!-- SM 2 -->
+  <rect x="460" y="235" width="180" height="100" rx="8" fill="url(#warpGrad)" stroke="#27AE60" stroke-width="1.5" filter="url(#shadow)"/>
+  <text x="550" y="260" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#1E8449">SM 2</text>
+  <text x="550" y="280" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#555">Warp Scheduler 0-3</text>
+  <text x="550" y="298" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#888">4 Dispatch Unit • Scoreboard</text>
+  <text x="550" y="316" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#888">Tensor Core ×4 • CUDA Core ×128</text>
+
+  <!-- Bottom annotation -->
+  <rect x="20" y="355" width="640" height="55" rx="8" fill="#ECF0F1" stroke="#BDC3C7" stroke-width="1"/>
+  <text x="340" y="378" text-anchor="middle" font-family="sans-serif" font-size="13" font-weight="bold" fill="#2C3E50">每一层的作用</text>
+  <text x="340" y="398" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#555">
+    TBS（全局）：把 Block 放到 SM → Warp Scheduler（SM 内）：从就绪池中选 Warp → Dispatch Unit（SM 内）：检查端口 → 发射指令
+  </text>
+
+  <!-- Divider between TBS and SM layer -->
+  <text x="340" y="220" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#95A5A6">▼ TBS 为每个 Block 选一个 SM ▼</text>
+
+  <!-- Layer 3: Key insight -->
+  <rect x="20" y="418" width="305" height="45" rx="6" fill="#E8F8F5" stroke="#A3E4D7" stroke-width="1"/>
+  <text x="172" y="438" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#1E6E5C">
+    TBS 只看物理容量有没剩余
+  </text>
+  <text x="172" y="454" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#888">
+    Block 不发完，资源不释放 → TBS 看不到「等数据」
+  </text>
+
+  <rect x="355" y="418" width="305" height="45" rx="6" fill="#FDEBD0" stroke="#F5B041" stroke-width="1"/>
+  <text x="507" y="438" text-anchor="middle" font-family="sans-serif" font-size="10" fill="#A04000">
+    Warp Scheduler 只看数据是否就绪
+  </text>
+  <text x="507" y="454" text-anchor="middle" font-family="sans-serif" font-size="9" fill="#888">
+    数据没回来 → 跳过这个 Warp → 零开销切换到下一个 ✓
+  </text>
+</svg>

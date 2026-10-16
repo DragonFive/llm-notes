@@ -1,0 +1,1832 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="机器学习系统学习笔记 —— GPU 调度、Tensor Core、编译器与推理框架">
+      
+      
+      
+        <link rel="canonical" href="https://dragonfive.github.io/llm-notes/notes/2026-07-07_gemm_ar_multimem_deep_dive/">
+      
+      
+        <link rel="prev" href="../2026-10-10_xllm_sfadcp_dcp_decode_attention_deep_dive/">
+      
+      
+        <link rel="next" href="../2026-07-06_mma-instruction-deep-dive/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>GEMM+AR 融合与 multimem 通信深潜 - LLM Notes</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#gemmar-multimem" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../.." title="LLM Notes" class="md-header__button md-logo" aria-label="LLM Notes" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            LLM Notes
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              GEMM+AR 融合与 multimem 通信深潜
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="切换到深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="切换到深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="切换到浅色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="切换到浅色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/DragonFive/llm-notes" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DragonFive/llm-notes
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="LLM Notes" class="md-nav__button md-logo" aria-label="LLM Notes" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    LLM Notes
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/DragonFive/llm-notes" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DragonFive/llm-notes
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    首页
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    推理系统与分布式并行
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    推理系统与分布式并行
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-10-13_xllm_linear_tail_prefix_cache_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    深入解析 linear tail prefix cache
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-10-10_xllm_sfadcp_dcp_decode_attention_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SfaDcp:decode KV 分条注意力深潜
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU Kernel 与指令级
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    GPU Kernel 与指令级
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GEMM+AR 融合与 multimem 通信深潜
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GEMM+AR 融合与 multimem 通信深潜
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景引入
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        前置概念解释
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="前置概念解释">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tile-grain-vs-chunk-grain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        通信粒度：tile grain vs chunk grain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cta-warp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CTA 内 warp 分工
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tmemtensor-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TMEM：Tensor Memory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#uc-mc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UC 地址与 MC 地址
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        核心讲解
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="核心讲解">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-nvlink-sharp-nvswitch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. NVLink SHARP 与 NVSwitch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-multimem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. 三条 multimem 指令
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-two-shot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. two-shot 同步协议
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-task-partition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. 任务划分（Task Partition）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. 三层同步
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. 三层同步">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tile-pre-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第一层：Tile pre-sync
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tile" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第二层：Tile 内数据并行
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kernel-final-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第三层：Kernel 尾部 final sync
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        多角度追问
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        边界与极端情况
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        参考文献 &amp; 延展学习
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-06_mma-instruction-deep-dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MMA 指令深潜：线程分配、Fragment Layout 与数据流
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-04_tensor_core_ptx_pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tensor Core PTX 指令管线全拆解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-02_wgmma_hopper_gemm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WGMMA Hopper GEMM 完整讲解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-29_async_instruction_scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    指令调度代际跃迁：从同步锁资源到异步发令枪
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-25_warp_scheduler_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Warp Scheduler 硬件架构全解析
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-24_gpu_scheduling_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU 调度深潜：TBS、Warp Scheduler 与延迟隐藏的完整拆解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-23_pytorch_compiler_stack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch 编译栈与 Lowering 层次映射
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-23_fusion_tiling_layout/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fusion / Tiling / Layout 三元组
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-22_pdl_vs_cudagraph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PDL vs CUDA Graph vs Piecewise CUDA Graph — LLM 推理 kernel launch overhead 优化全景
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-22_megakernel_vs_unfused/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Megakernel vs Unfused — 为什么 GPU 推理优化不能迷信"大融合"
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    编译器与图优化
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    编译器与图优化
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-12_inductor_fx_passes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inductor FX Passes — Lowering 之前的图级优化全景
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-09_inductor_ir_design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inductor IR 设计精髓 — Define-by-Run、闭包组合、V.ops 虚拟化
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景引入
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        前置概念解释
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="前置概念解释">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tile-grain-vs-chunk-grain" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        通信粒度：tile grain vs chunk grain
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#cta-warp" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CTA 内 warp 分工
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tmemtensor-memory" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TMEM：Tensor Memory
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#uc-mc" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        UC 地址与 MC 地址
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        核心讲解
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="核心讲解">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-nvlink-sharp-nvswitch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. NVLink SHARP 与 NVSwitch
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-multimem" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. 三条 multimem 指令
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-two-shot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. two-shot 同步协议
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-task-partition" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. 任务划分（Task Partition）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. 三层同步
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="5. 三层同步">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#tile-pre-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第一层：Tile pre-sync
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tile" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第二层：Tile 内数据并行
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kernel-final-sync" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第三层：Kernel 尾部 final sync
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        多角度追问
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        边界与极端情况
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        参考文献 &amp; 延展学习
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="gemmar-multimem">GEMM+AR 融合与 multimem 通信深潜<a class="headerlink" href="#gemmar-multimem" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>完整讲解：从通信粒度选择、UC/MC 地址体系、multimem 指令集、NVLink SHARP 在网计算，到 two-shot 同步协议、任务划分与三层同步的完整链路。</p>
+</blockquote>
+<h2 id="_1">场景引入<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>在 Tensor Parallelism（TP）的 RowParallelLinear 中，每个 GPU 算出输出矩阵的一个部分（f_i @ B_i = Y_i），需要 AllReduce 得到完整结果 Y = sum(Y_i)。传统做法是 GEMM kernel 算完后，再走 NCCL ring AllReduce——但这开启了两个问题：</p>
+<ol>
+<li><strong>调度不确定性</strong>：GEMM kernel 占满所有 SM，AR kernel 排队等 SM 释放。</li>
+<li><strong>重叠窗口碎片化</strong>：GEMM 尾部释放 SM 是渐进的，AR 能抢到的 SM 数量不可控。</li>
+</ol>
+<p>答案是把 AllReduce 做进 GEMM kernel 内部——GEMM+AR 融合。底层硬件能力是 multimem 指令集 + NVLink SHARP。</p>
+<h2 id="_2">前置概念解释<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="tile-grain-vs-chunk-grain">通信粒度：tile grain vs chunk grain<a class="headerlink" href="#tile-grain-vs-chunk-grain" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Tile Grain</th>
+<th>Chunk Grain</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>粒度</td>
+<td>单个 GEMM CTA tile（例如 128×128）</td>
+<td>更大数据块（多个 tiles、KV block）</td>
+</tr>
+<tr>
+<td>通信时机</td>
+<td>计算自然产出边界</td>
+<td>阶段边界（输入 gather、输出散射）</td>
+</tr>
+<tr>
+<td>通信方式</td>
+<td>嵌入 GEMM kernel</td>
+<td>单独通信 kernel / Copy Engine</td>
+</tr>
+<tr>
+<td>优点</td>
+<td>天然 overlap、隐藏延迟好</td>
+<td>工程简单、可用 CE 卸载</td>
+</tr>
+<tr>
+<td>缺点</td>
+<td>kernel 复杂</td>
+<td>通信尾巴长、暴露空闲</td>
+</tr>
+<tr>
+<td>典型场景</td>
+<td>GEMM+AR (TP RowParallel)</td>
+<td>All-Gather+GEMM、Ring Attention</td>
+</tr>
+</tbody>
+</table>
+<p>GEMM+AR 适合 tile grain，因为 RowParallelLinear 的输出按 tile 产出——每个 CTA tile 算完后数据就在 register/shared/global 路径上，立刻发起通信天然契合。</p>
+<h3 id="cta-warp">CTA 内 warp 分工<a class="headerlink" href="#cta-warp" title="Permanent link">&para;</a></h3>
+<p>一个 CTA（线程块）最多 1024 线程 = 32 个 warp。程序员自由分配 warp 到不同"岗位"：</p>
+<ul>
+<li>GEMM warp group：做 MMA 计算</li>
+<li>EPILOGUE warp group：做 epilogue（TMA store、flag arrive）</li>
+<li>AR warp group：做 AllReduce 通信</li>
+</ul>
+<p>所有 warp 在同一个 SM 上驻留，4 个 warp scheduler 轮转调度。分工后各 group 可以流水线并行：GEMM 算 tile_{i+1}，epilogue 写 tile_i，AR reduce tile_{i-1}。</p>
+<h3 id="tmemtensor-memory">TMEM：Tensor Memory<a class="headerlink" href="#tmemtensor-memory" title="Permanent link">&para;</a></h3>
+<p>Blackwell（B200）引入的新硬件层次，专门存 MMA 指令的 accumulator（累加器）。Hopper/Ampere 中 accumulator 占通用寄存器（GPR），导致 register pressure 大、occupancy 低。TMEM 把 accumulator 从 GPR 分离出来，<strong>释放 GPR 空间给额外的 AR warp group</strong>。这就是"同一个 CTA 里多放一组 AR warp"的前提。</p>
+<h3 id="uc-mc">UC 地址与 MC 地址<a class="headerlink" href="#uc-mc" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>含义</th>
+<th>访问方式</th>
+<th>目标范围</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>UC address</td>
+<td>普通 CUDA 物理地址</td>
+<td><code>ld.global</code> / <code>st.global</code></td>
+<td>本 GPU 的物理内存</td>
+</tr>
+<tr>
+<td>MC address</td>
+<td>多播虚拟地址</td>
+<td><code>multimem.*</code> 指令</td>
+<td>所有 rank 的对应物理内存</td>
+</tr>
+</tbody>
+</table>
+<p>同一块物理内存在 GM 上。UC 和 MC 是两条不同访问路径。UC 走本地 load/store，MC 走 NVLink → NVSwitch 在网计算。</p>
+<h2 id="_3">核心讲解<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<h3 id="1-nvlink-sharp-nvswitch">1. NVLink SHARP 与 NVSwitch<a class="headerlink" href="#1-nvlink-sharp-nvswitch" title="Permanent link">&para;</a></h3>
+<p>NVSwitch 是 GPU 之间的<strong>交换芯片</strong>，本体功能是路由：把数据从端口 A 搬到端口 B。NVLink SHARP（NVLS）是 NVSwitch 内部集成的<strong>在网计算引擎</strong>，可以在数据流经 switch 时截住数据做 reduce/broadcast，不需要把一个 rank 的数据搬进另一个 rank 的 SM 上算。</p>
+<p>SHARP 最早来自 Mellanox InfiniBand 交换机，NVIDIA 收购后搬到 NVSwitch 上。<strong>首次出现于 Hopper 架构（H100，SM90）。Ampere 有 NVSwitch 但没有 SHARP 能力。</strong></p>
+<h3 id="2-multimem">2. 三条 multimem 指令<a class="headerlink" href="#2-multimem" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>指令</th>
+<th>作用</th>
+<th>AR 中的用法</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>multimem.ld_reduce</code></td>
+<td>从多个 rank 的 MC 地址读数据，NVSwitch 做 reduce，结果返回发起者</td>
+<td>Tile AllReduce 的核心：Gather + Reduce</td>
+</tr>
+<tr>
+<td><code>multimem.st</code></td>
+<td>发起者写数据到 MC 地址，NVSwitch broadcast 到所有 rank</td>
+<td>把 reduce 结果广播回所有 rank</td>
+</tr>
+<tr>
+<td><code>multimem.red</code></td>
+<td>对多个 rank 的 MC 地址做原子 reduce（如 add）</td>
+<td>做 tile flag 计数器、跨 rank barrier</td>
+</tr>
+</tbody>
+</table>
+<h3 id="3-two-shot">3. two-shot 同步协议<a class="headerlink" href="#3-two-shot" title="Permanent link">&para;</a></h3>
+<p>多 rank 协作中，AR warp 必须知道"所有 rank 的 tile 都写好了"才能发起 ld_reduce。two-shot 协议用 tile 粒度的 MC flag 做生产者-消费者同步：</p>
+<p><strong>生产者（epilogue warp group）</strong>：
+1. <code>cp_async_bulk_wait_group(0)</code> — 等 TMA store 硬件完成
+2. <code>fence_acq_rel_gpu()</code> — 确保数据先于 flag 被其他 rank 看到
+3. <code>elect_one()</code> + <code>multimem.red.add(flag, 1)</code> — 一个线程对 flag +1
+4. <code>fence_proxy("alias")</code> — 确保 MC 路径可见 UC 路径刚写的数据</p>
+<p><strong>消费者（AR warp group）</strong>：
+1. <code>elect_one()</code> + <code>spin_wait(flag == num_ranks)</code> — 一个线程等 flag
+2. <code>arrive_and_wait()</code> — CTA 内 barrier，召集 AR warp 所有线程
+3. <code>multimem.ld_reduce</code> + <code>multimem.st</code> — 开始 AllReduce</p>
+<p>对比：one-shot 假设 GEMM 进度在所有 rank 严格同步，不做 flag 检查，适用于小数据量。two-shot 多一步 flag 开销，换确定性正确。</p>
+<h3 id="4-task-partition">4. 任务划分（Task Partition）<a class="headerlink" href="#4-task-partition" title="Permanent link">&para;</a></h3>
+<p>核心思想：不要把完整的 M×N tile 交给每个 rank 做重复 reduce。</p>
+<p>将 M 维度切成 num_ranks 份（切 M 不是切 N，因为行主序下切 M 保证数据连续访问，TMA 和 multimem 的 DMA 效率高）：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">m_local_rank</span> <span class="o">=</span> <span class="n">cta_mma_tile_m</span> <span class="o">/</span> <span class="n">num_ranks</span>  <span class="c1"># 每个 rank 负责 M 行的 1/4</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="c1"># CuTe DSL 切分 tensor</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">tCgC_mc_slice_partitioned</span> <span class="o">=</span> <span class="n">cute</span><span class="o">.</span><span class="n">zipped_divide</span><span class="p">(</span><span class="n">tCgC_mc_slice</span><span class="p">,</span> <span class="p">(</span><span class="n">m_local_rank</span><span class="p">,</span> <span class="n">N</span><span class="p">))</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="n">tCgC_mc_local_rank</span> <span class="o">=</span> <span class="n">cute</span><span class="o">.</span><span class="n">slice_</span><span class="p">(</span><span class="n">tCgC_mc_slice_partitioned</span><span class="p">,</span> <span class="p">((</span><span class="kc">None</span><span class="p">,</span> <span class="kc">None</span><span class="p">),</span> <span class="p">(</span><span class="n">rank_id</span><span class="p">,</span> <span class="mi">0</span><span class="p">)))</span>
+</code></pre></div>
+<p>每个 rank 只负责自己的 1/4 → ld_reduce 只处理这部分 → st broadcast 自己的 1/4 → 最后每张卡都有完整 tile。reduce 工作被摊开，NVSwitch 带宽充分利用。</p>
+<p>128-bit 处理粒度由 multimem PTX 指令的硬件限制决定——每次 ld_reduce / st 操作数就是 128 bits = 8×BF16 = 4×FP32 = 16×FP8。</p>
+<h3 id="5">5. 三层同步<a class="headerlink" href="#5" title="Permanent link">&para;</a></h3>
+<h4 id="tile-pre-sync">第一层：Tile pre-sync<a class="headerlink" href="#tile-pre-sync" title="Permanent link">&para;</a></h4>
+<p>每个 tile 的 epilogue 写完后，通过 MC flag <code>multimem.red.add</code> 通知其他 rank。AR warp spin 等 flag == num_ranks。scope="gpu"（本 GPU 内协调），order="relaxed"（数据完整性已有其他 fence 保证）。</p>
+<h4 id="tile">第二层：Tile 内数据并行<a class="headerlink" href="#tile" title="Permanent link">&para;</a></h4>
+<p>每个线程只处理自己的 128-bit 数据，无跨线程依赖。不需要元素间额外同步。</p>
+<h4 id="kernel-final-sync">第三层：Kernel 尾部 final sync<a class="headerlink" href="#kernel-final-sync" title="Permanent link">&para;</a></h4>
+<p>所有 SM 的 AR 工作完成后，确保所有 <code>multimem.st</code> broadcast 对其他 GPU 可见。使用 Per-SM flag（<code>barrier_flag + last_tile_id + sm_id_linear</code>），scope="sys"（跨所有设备），order="release"（写入方）/"acquire"（等待方），确保跨 GPU memory ordering。</p>
+<p>Scope 语义：
+- <code>scope="gpu"</code>：本 GPU 所有 SM、copy engine 可见。用于 tile ready flag——AR warp 在本 GPU 读本 GM 的 flag 副本（NVSwitch 已同步）。
+- <code>scope="sys"</code>：所有 GPU + CPU 可见。用于 final sync——后继 kernel 在其他 GPU 上运行，必须看到前序 kernel 的 broadcast 结果已落地。</p>
+<h2 id="_4">多角度追问<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>[!question] 一个 CTA 里有多组 warp，为什么是"多放一个 AR warp group"而不是"多放一个 AR warp"？
+一个 warp 只有 32 线程，处理 tile 的 128-bit 数据流水线需要多线程并行。AR 工作需要足够线程覆盖 N 方向，通常需要多个 warp 组成 AR warp group。</p>
+<p>[!question] multimem.ld_reduce 的数据从哪来？
+从各 rank 的 GM（通过 MC 地址）。之前 epilogue 通过 TMA store 把 tile 从 shared memory 写到了 UC 地址（local GM）。multimem 碰的是 GM，不碰 shared memory 和 register。</p>
+<p>[!question] 为什么 two-shot 有两个 PR 展示不同角色？
+FlashInfer PR #1695 展示 epilogue 侧的 arrive 代码（生产者），SGLang PR #15103 展示 AR warp 侧的 spin wait 代码（消费者）。它们是同一个同步协议的互补双方。</p>
+<p>[!question] NCCL 还有用吗？
+有。NCCL 适合 chunk grain 的大数据量 AllReduce（梯度同步、AllGather KV），启动开销可摊薄。SHARP 适合 tile grain 的零启动开销即时 reduce，不可替代。</p>
+</blockquote>
+<h2 id="_5">边界与极端情况<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>one-shot vs two-shot 切换</strong>：数据量小时 one-shot 够了（tile 生产同步）；数据量大时 TMA store 延迟不均，必须 two-shot 的 flag 检查。</li>
+<li><strong>final sync 的 race condition</strong>：如果所有 SM 共用一个全局 final flag，SM 0 先完成 +1，但 SM 5 还在 broadcast 老 tile——后继 kernel 读到半成品。Per-SM flag 排除此窗口。</li>
+<li><strong>scope 混用风险</strong>：tile flag 用 <code>scope="sys"</code> 会引入不必要的跨设备开销；final sync 用 <code>scope="gpu"</code> 会导致后继 kernel 在 GPU 1 上看不到 GPU 0 的 flag 更新——正确性 bug。</li>
+</ul>
+<h2 id="_6">参考文献 &amp; 延展学习<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>来源</th>
+<th>类型</th>
+<th>难度</th>
+<th>链接</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>杨轶凡《GEMM+AR 融合》系列</td>
+<td>知乎文章</td>
+<td>advanced</td>
+<td>https://zhuanlan.zhihu.com/p/2035845795082133865</td>
+</tr>
+<tr>
+<td>SGLang PR #15103</td>
+<td>PR (two-shot tile sync)</td>
+<td>advanced</td>
+<td>github.com/sgl-project/sglang/pull/15103</td>
+</tr>
+<tr>
+<td>FlashInfer PR #1695</td>
+<td>PR (CuTe DSL two-shot)</td>
+<td>advanced</td>
+<td>github.com/flashinfer-ai/flashinfer/pull/1695</td>
+</tr>
+<tr>
+<td>FlashInfer PR #2171</td>
+<td>PR (barrier fix)</td>
+<td>advanced</td>
+<td>github.com/flashinfer-ai/flashinfer/pull/2171</td>
+</tr>
+<tr>
+<td>CUTLASS Distributed README</td>
+<td>官方文档</td>
+<td>intermediate</td>
+<td>github.com/NVIDIA/cutlass</td>
+</tr>
+<tr>
+<td>NVIDIA NVLink SHARP 白皮书</td>
+<td>官方文档</td>
+<td>advanced</td>
+<td>nvidia.com</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  回到页面顶部
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="页脚" >
+        
+          
+          <a href="../2026-10-10_xllm_sfadcp_dcp_decode_attention_deep_dive/" class="md-footer__link md-footer__link--prev" aria-label="上一页: SfaDcp:decode KV 分条注意力深潜">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                上一页
+              </span>
+              <div class="md-ellipsis">
+                SfaDcp:decode KV 分条注意力深潜
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../2026-07-06_mma-instruction-deep-dive/" class="md-footer__link md-footer__link--next" aria-label="下一页: MMA 指令深潜：线程分配、Fragment Layout 与数据流">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                下一页
+              </span>
+              <div class="md-ellipsis">
+                MMA 指令深潜：线程分配、Fragment Layout 与数据流
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2026 DragonFive
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.footer", "search.highlight", "search.share", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

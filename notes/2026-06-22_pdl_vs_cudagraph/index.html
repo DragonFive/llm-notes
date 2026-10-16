@@ -1,0 +1,2037 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="机器学习系统学习笔记 —— GPU 调度、Tensor Core、编译器与推理框架">
+      
+      
+      
+        <link rel="canonical" href="https://dragonfive.github.io/llm-notes/notes/2026-06-22_pdl_vs_cudagraph/">
+      
+      
+        <link rel="prev" href="../2026-06-23_fusion_tiling_layout/">
+      
+      
+        <link rel="next" href="../2026-06-22_megakernel_vs_unfused/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>PDL vs CUDA Graph vs Piecewise CUDA Graph — LLM 推理 kernel launch overhead 优化全景 - LLM Notes</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#pdl-vs-cuda-graph-vs-piecewise-cuda-graph-llm-kernel-launch-overhead" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../.." title="LLM Notes" class="md-header__button md-logo" aria-label="LLM Notes" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            LLM Notes
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              PDL vs CUDA Graph vs Piecewise CUDA Graph — LLM 推理 kernel launch overhead 优化全景
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="切换到深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="切换到深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="切换到浅色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="切换到浅色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/DragonFive/llm-notes" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DragonFive/llm-notes
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="LLM Notes" class="md-nav__button md-logo" aria-label="LLM Notes" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    LLM Notes
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/DragonFive/llm-notes" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DragonFive/llm-notes
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    首页
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    推理系统与分布式并行
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    推理系统与分布式并行
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-10-13_xllm_linear_tail_prefix_cache_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    深入解析 linear tail prefix cache
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-10-10_xllm_sfadcp_dcp_decode_attention_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SfaDcp:decode KV 分条注意力深潜
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU Kernel 与指令级
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    GPU Kernel 与指令级
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-07_gemm_ar_multimem_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GEMM+AR 融合与 multimem 通信深潜
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-06_mma-instruction-deep-dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MMA 指令深潜：线程分配、Fragment Layout 与数据流
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-04_tensor_core_ptx_pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tensor Core PTX 指令管线全拆解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-02_wgmma_hopper_gemm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WGMMA Hopper GEMM 完整讲解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-29_async_instruction_scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    指令调度代际跃迁：从同步锁资源到异步发令枪
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-25_warp_scheduler_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Warp Scheduler 硬件架构全解析
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-24_gpu_scheduling_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU 调度深潜：TBS、Warp Scheduler 与延迟隐藏的完整拆解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-23_pytorch_compiler_stack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch 编译栈与 Lowering 层次映射
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-23_fusion_tiling_layout/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fusion / Tiling / Layout 三元组
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PDL vs CUDA Graph vs Piecewise CUDA Graph — LLM 推理 kernel launch overhead 优化全景
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PDL vs CUDA Graph vs Piecewise CUDA Graph — LLM 推理 kernel launch overhead 优化全景
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景引入
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        前置概念解释
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="前置概念解释">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#kernel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        kernel 是什么？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#launch-overhead" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        launch overhead 是什么？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        什么是"图要重录"？
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        三代技术对比（核心讲解）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="三代技术对比（核心讲解）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#l1pdlprogrammatic-dependent-launch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L1：PDL（Programmatic Dependent Launch）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l2cuda-graph" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L2：CUDA Graph（整图录制）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l3piecewise-cuda-graphvllm-06" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L3：Piecewise CUDA Graph（vLLM 0.6+ 主推）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4 种"动态"维度拆解
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#moe-kernel-by-kernel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MoE 推理的 kernel-by-kernel 分析
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MoE 推理的 kernel-by-kernel 分析">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#kernel-1-router" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kernel 1: Router（门控网络）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kernel-2-dispatch-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kernel 2: Dispatch（把 token 路由到专家）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kernel-3-4-fc1-fc2-gemm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kernel 3-4: FC1 / FC2（专家 GEMM）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kernel-5-combine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kernel 5: Combine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vllm-moe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        现代 vLLM MoE 优化栈
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        多角度追问
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        边界与极端情况
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        总结
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        参考文献 &amp; 延展学习
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        关联页面
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-22_megakernel_vs_unfused/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Megakernel vs Unfused — 为什么 GPU 推理优化不能迷信"大融合"
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    编译器与图优化
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    编译器与图优化
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-12_inductor_fx_passes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inductor FX Passes — Lowering 之前的图级优化全景
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-09_inductor_ir_design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inductor IR 设计精髓 — Define-by-Run、闭包组合、V.ops 虚拟化
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景引入
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        前置概念解释
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="前置概念解释">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#kernel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        kernel 是什么？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#launch-overhead" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        launch overhead 是什么？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        什么是"图要重录"？
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        三代技术对比（核心讲解）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="三代技术对比（核心讲解）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#l1pdlprogrammatic-dependent-launch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L1：PDL（Programmatic Dependent Launch）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l2cuda-graph" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L2：CUDA Graph（整图录制）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#l3piecewise-cuda-graphvllm-06" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        L3：Piecewise CUDA Graph（vLLM 0.6+ 主推）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4 种"动态"维度拆解
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#moe-kernel-by-kernel" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MoE 推理的 kernel-by-kernel 分析
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MoE 推理的 kernel-by-kernel 分析">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#kernel-1-router" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kernel 1: Router（门控网络）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kernel-2-dispatch-token" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kernel 2: Dispatch（把 token 路由到专家）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kernel-3-4-fc1-fc2-gemm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kernel 3-4: FC1 / FC2（专家 GEMM）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kernel-5-combine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kernel 5: Combine
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vllm-moe" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        现代 vLLM MoE 优化栈
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        多角度追问
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        边界与极端情况
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        总结
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        参考文献 &amp; 延展学习
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        关联页面
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="pdl-vs-cuda-graph-vs-piecewise-cuda-graph-llm-kernel-launch-overhead">PDL vs CUDA Graph vs Piecewise CUDA Graph — LLM 推理 kernel launch overhead 优化全景<a class="headerlink" href="#pdl-vs-cuda-graph-vs-piecewise-cuda-graph-llm-kernel-launch-overhead" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>完整讲解：从杨轶凡知乎回答的"PDL 调好了没"开始，到 vLLM 0.6+ 的 Piecewise CUDA Graph，逐层讲清楚 LLM 推理中砍掉 CPU launch overhead 的三代技术。</p>
+</blockquote>
+<h2 id="_1">场景引入<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>想象你在餐厅点菜：</p>
+<ul>
+<li><strong>传统方式（无优化）</strong>：你点一份炒饭 → 等厨师做完 → 端上来 → 你再点一杯饮料 → 等 → 端上来 → 你再点一份汤。每点一道你（CPU）都要等厨房（GPU）做完才能点下一道。<strong>这就是 Unfused kernel 的 launch overhead</strong>——CPU 在中间干等。</li>
+<li><strong>PDL 优化</strong>：你跟服务员说"炒饭、饮料、汤按顺序来"，服务员把订单发给厨房，自己去招呼其他客人了。<strong>但你还是要先跟服务员说第一句话</strong>（CPU 启动第一个 kernel）。</li>
+<li><strong>CUDA Graph 优化</strong>：你把整桌菜都点完（一次性录制），之后每次按 play，<strong>连服务员都不用叫</strong>，厨房自己按顺序出菜。</li>
+<li><strong>Piecewise CUDA Graph 优化</strong>：菜单里有几道菜"做法固定"（稳定的算子），有几道"看当天食材"（动态的算子）。把固定的菜用 Graph 流程跑（按 play 就行），动态的菜单独点单。</li>
+</ul>
+<p><strong>核心问题</strong>：什么时候用哪种方案？为什么业界最终选了 Piecewise？</p>
+<hr />
+<h2 id="_2">前置概念解释<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="kernel">kernel 是什么？<a class="headerlink" href="#kernel" title="Permanent link">&para;</a></h3>
+<p>GPU 上的一次"操作任务"。一次 LLM 推理 = 几十到几百个 kernel 排队执行。比如一个 Transformer 层 ≈ 12 个 kernel（QKV 投影、Attention 计算、Output 投影、FFN 两层、LayerNorm × 2、Residual × 2...）。</p>
+<h3 id="launch-overhead">launch overhead 是什么？<a class="headerlink" href="#launch-overhead" title="Permanent link">&para;</a></h3>
+<p>CPU 把任务"发射"给 GPU 的成本。每次发射要等 GPU 报告"上一个任务完成了"，CPU 再发射下一个。这个等待 ≈ 5-10 μs。</p>
+<p><strong>为什么是大问题？</strong>
+- 单个 kernel 跑 50-100 μs 时，launch overhead 占比 5-10%
+- 推理时延敏感场景（如流式输出），每一步推理都涉及多次 launch
+- 1000 个 token 输出 × 10 次 launch/步 × 5 μs = 50 ms 纯浪费</p>
+<h3 id="_3">什么是"图要重录"？<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<p>CUDA Graph 录制时冻结 4 类信息：
+1. <strong>kernel launch 参数</strong>（block size、grid size、shared memory）
+2. <strong>tensor 形状</strong>（shape、stride、dtype）
+3. <strong>kernel 之间的数据依赖</strong>
+4. <strong>输入输出 tensor 的内存地址</strong></p>
+<p><strong>这 4 类信息里任一变，Graph 就要重录。</strong> 变了之后三种处理方式：</p>
+<table>
+<thead>
+<tr>
+<th>方式</th>
+<th>适用</th>
+<th>代价</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>整图重录</td>
+<td>变化频率低</td>
+<td>几十 μs 到几 ms</td>
+</tr>
+<tr>
+<td><strong>Piecewise</strong></td>
+<td>变化有档位</td>
+<td>预录 N 个，按需选</td>
+</tr>
+<tr>
+<td><strong>PDL</strong></td>
+<td>放弃录图</td>
+<td>只砍 CPU 等待，不砍 launch</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_4">三代技术对比（核心讲解）<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<h3 id="l1pdlprogrammatic-dependent-launch">L1：PDL（Programmatic Dependent Launch）<a class="headerlink" href="#l1pdlprogrammatic-dependent-launch" title="Permanent link">&para;</a></h3>
+<p><strong>核心思想</strong>：让 GPU 自己管 kernel 之间的依赖图，CPU 不用在中间等。</p>
+<p><strong>API</strong>：<code>cudaLaunchKernelEx</code>（CUDA 12.3+），通过 <code>cudaLaunchAttribute</code> 设置 <code>cudaLaunchAttributeProgrammaticStreamSerialization</code>。</p>
+<p><strong>适合场景</strong>：
+- 团队没有 profiling 能力
+- 业务请求分布太散
+- 不想录图但要砍 launch overhead</p>
+<p><strong>局限</strong>：
+- CPU 还是要启动第一个 kernel
+- 每个 launch 都要配置依赖
+- 不砍 kernel 启动，只砍 CPU 等待</p>
+<hr />
+<h3 id="l2cuda-graph">L2：CUDA Graph（整图录制）<a class="headerlink" href="#l2cuda-graph" title="Permanent link">&para;</a></h3>
+<p><strong>核心思想</strong>：把整段推理的 kernel 序列一次性录制成 DAG，整段重放，<strong>CPU 完全不参与</strong>。</p>
+<p><strong>API</strong>：<code>torch.cuda.graph()</code> 或 <code>cudaGraph_t</code> C API。</p>
+<p><strong>适合场景</strong>：
+- 单次推理延迟敏感（≤10ms）
+- 高频 batch 集中
+- 计算量相对小</p>
+<p><strong>硬约束</strong>（图要重录的 4 个条件）：
+- kernel launch 参数变
+- tensor shape 变
+- 数据依赖变
+- 内存地址变</p>
+<hr />
+<h3 id="l3piecewise-cuda-graphvllm-06">L3：Piecewise CUDA Graph（vLLM 0.6+ 主推）<a class="headerlink" href="#l3piecewise-cuda-graphvllm-06" title="Permanent link">&para;</a></h3>
+<p><strong>核心思想</strong>：把大图按算子切分成子图，<strong>稳定的算子块录进 Graph，动态的算子留在 eager 模式</strong>。</p>
+<p><strong>两种 Piecewise 含义</strong>（容易混淆）：</p>
+<table>
+<thead>
+<tr>
+<th>类型</th>
+<th>含义</th>
+<th>时代</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>老 Piecewise</strong></td>
+<td>按 batch/seq_len 分桶，每桶一个图 + padding</td>
+<td>v0 时代</td>
+</tr>
+<tr>
+<td><strong>vLLM compilation Piecewise</strong></td>
+<td>按算子切分大图为子图，每子图独立录制</td>
+<td>vLLM 0.6+</td>
+</tr>
+</tbody>
+</table>
+<p><strong>vLLM 0.6+ 的真实做法</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>整段推理计算图
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    ↓ vLLM compilation pass（找切分点）
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>    ↓
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    切分 (PIECEWISE 切分点)
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>    ↓           ↓           ↓
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a> 子图 A      子图 B      子图 C
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>(Linear+LN)  (Attention) (Residual)
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    ↓           ↓           ↓
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a> CUDA Graph   Eager      CUDA Graph
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a> (录一次)    (动态跑)    (录一次)
+</code></pre></div>
+<p><strong>核心 Pass</strong>：
+1. <strong>图分割 Pass</strong>：用动态规划找最优切分点
+2. <strong>算子融合 Pass</strong>：把多个小算子合成一个（LN + Linear → 一层）
+3. <strong>编译后端 Pass</strong>：Triton / Inductor / 自定义</p>
+<p><strong>为什么 Attention 排除在外？</strong>
+- Attention grid 与 seq_len² 相关，shape 变化最剧烈
+- 录制成本 = 录 N² 个变体
+- KV cache 长度每步变</p>
+<hr />
+<h2 id="4">4 种"动态"维度拆解<a class="headerlink" href="#4" title="Permanent link">&para;</a></h2>
+<p>LLM 推理里有 4 种"动态"，常被混在一起说：</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>例子</th>
+<th>整图能用？</th>
+<th>工业方案</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>D1 调度动态</strong></td>
+<td>batch size 变化</td>
+<td>❌</td>
+<td>Piecewise 按 batch 桶</td>
+</tr>
+<tr>
+<td><strong>D2 长度动态</strong></td>
+<td>prefill seq_len 变化</td>
+<td>❌</td>
+<td>Piecewise 按 seq_len 桶 + Chunked Prefill</td>
+</tr>
+<tr>
+<td><strong>D3 路由动态</strong></td>
+<td>MoE 专家选择</td>
+<td>✅</td>
+<td>整图（kernel 不看路由结果）</td>
+</tr>
+<tr>
+<td><strong>D4 数据依赖动态</strong></td>
+<td>spec dec 接受/拒绝</td>
+<td>❌</td>
+<td>分支子图</td>
+</tr>
+</tbody>
+</table>
+<p><strong>关键洞察</strong>：
+- D3 的"动态"在<strong>数据内容</strong>层，不在<strong>形状</strong>层——kernel 接收的 input shape 不变
+- vLLM 实际用 Piecewise 把稳定的算子块录进 Graph，动态的 Attention 留在 eager
+- <strong>不是"按 D1/D2 分桶"</strong>，而是"按算子切分点切分"</p>
+<hr />
+<h2 id="moe-kernel-by-kernel">MoE 推理的 kernel-by-kernel 分析<a class="headerlink" href="#moe-kernel-by-kernel" title="Permanent link">&para;</a></h2>
+<p>把 MoE 的 dispatch → FC1 → FC2 → combine 拆到 kernel 级别：</p>
+<h3 id="kernel-1-router">Kernel 1: Router（门控网络）<a class="headerlink" href="#kernel-1-router" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># 输入: (batch, hidden_dim)</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># 输出: (batch, num_experts)  # 每个 token 对每个专家的分数</span>
+</code></pre></div>
+<ul>
+<li>形状稳定性：⚠️ 跟 D1 走</li>
+<li>能不能录 Graph：⚠️ 需要 Piecewise 按 batch 桶</li>
+</ul>
+<h3 id="kernel-2-dispatch-token">Kernel 2: Dispatch（把 token 路由到专家）<a class="headerlink" href="#kernel-2-dispatch-token" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># 输出形状: (num_dispatched_tokens, hidden_dim)  ← 这个 shape 每次都不同！</span>
+</code></pre></div>
+<ul>
+<li>形状稳定性：❌ 不稳定（每个专家分到的 token 数不同）</li>
+<li>能不能录 Graph：❌ <strong>不能</strong></li>
+</ul>
+<h3 id="kernel-3-4-fc1-fc2-gemm">Kernel 3-4: FC1 / FC2（专家 GEMM）<a class="headerlink" href="#kernel-3-4-fc1-fc2-gemm" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># 输入: (tokens_for_this_expert, hidden_dim)</span>
+</code></pre></div>
+<ul>
+<li>形状稳定性：❌ M 维度不固定</li>
+<li>能不能录 Graph：❌ <strong>不能</strong>（原始实现）</li>
+</ul>
+<p><strong>Grouped GEMM 解法</strong>：
+- 把 num_experts 个不同 M 的 GEMM <strong>打包成一次 launch</strong>
+- 输入是 <code>(M_total, K)</code>，M_total 固定
+- <strong>能被 Graph 录制</strong> ✅</p>
+<h3 id="kernel-5-combine">Kernel 5: Combine<a class="headerlink" href="#kernel-5-combine" title="Permanent link">&para;</a></h3>
+<ul>
+<li>形状稳定性：⚠️ 跟 D1 走</li>
+<li>能不能录 Graph：⚠️ Piecewise 按 batch 桶</li>
+</ul>
+<h3 id="vllm-moe">现代 vLLM MoE 优化栈<a class="headerlink" href="#vllm-moe" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>请求进来
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>    ↓
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>Router (CUDA Graph - 按 batch 桶)
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a>    ↓
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>Top-K 路由 (Eager - shape 真动态)
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>    ↓
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>Grouped GEMM (CUDA Graph - 按 M_total 桶) ← gmm 关键
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>    ↓
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>Activation (CUDA Graph - shape 固定)
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>    ↓
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>Grouped GEMM 第二层 (CUDA Graph)
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>    ↓
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a>Combine (CUDA Graph - 按 batch 桶)
+</code></pre></div>
+<hr />
+<h2 id="_5">多角度追问<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>[!question] Q1：权重在变（动态加载/LoRA 切换）怎么办？
+答：分两种情况——
+- 权重 shape 不变，只换内容：CUDA Graph 仍能录。Graph 锁的是地址，不是内容。
+- 权重 shape 变：整图废。要么录多份图，要么重新录制（几 ms 代价）。</p>
+<p>[!question] Q2：Megablocks / ScatterMoE 是什么？
+答：Grouped GEMM 的"更彻底"版本——把 MoE 的 block-sparse pattern 暴露给硬件，用 block-sparse matmul 替代 dense GEMM。算力利用率更高，但工程复杂。</p>
+<p>[!question] Q3：跨节点 MoE 怎么办？
+答：专家并行（Expert Parallelism, EP）——把 num_experts 分散到 N 个节点。需要 all-to-all 通信。CUDA Graph 录不进去（跨节点通信是硬约束）。这一段用 NCCL 单独优化。</p>
+<p>[!question] Q4：未来会怎么走？
+答：三个方向——
+1. CUDA Graph + 动态专家（gmm 这条路）—— vLLM/SGLang 在走
+2. Megakernel MoE —— 绕开 Graph 的所有限制（但回到杨轶凡的 ablation 批评）
+3. 稀疏化 + 量化 —— 减少算力需求，让 Graph 录制成本可接受</p>
+<p>[!question] Q5：那 PDL 现在还有用吗？
+答：<strong>基本没用</strong>。vLLM 0.6+ 已切到 Graph + 切分范式。PDL 是给"自研推理引擎 + 没有 compilation 框架"的团队准备的退路。</p>
+</blockquote>
+<hr />
+<h2 id="_6">边界与极端情况<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>情况</th>
+<th>推荐方案</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>单 GPU + 小模型 + 高 QPS</td>
+<td>CUDA Graph 整图</td>
+</tr>
+<tr>
+<td>单 GPU + MoE + 动态 batch</td>
+<td>Piecewise + Grouped GEMM</td>
+</tr>
+<tr>
+<td>多 GPU + MoE + 专家并行</td>
+<td>Piecewise + Grouped GEMM + NCCL（all-to-all 不进 Graph）</td>
+</tr>
+<tr>
+<td>spec decoding + MoE</td>
+<td>分支子图 + Grouped GEMM（极复杂）</td>
+</tr>
+<tr>
+<td>团队无 profiling 能力</td>
+<td>PDL（last resort）</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_7">总结<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h2>
+<p><strong>一句话</strong>：</p>
+<blockquote>
+<p><strong>PDL 是上一代技术，CUDA Graph 是终极方案，Piecewise CUDA Graph 是 Graph 在 dynamic shape 下的工程妥协。</strong> vLLM 0.6+ 的 compilation 框架（Inductor + 自定义 pass）把这三条路统一了。MoE 的核心解法是 Grouped GEMM 把动态 M 维度对齐成 M_total，让 Graph 可录制。</p>
+</blockquote>
+<p><strong>核心修正</strong>（来自本次与 Maxwell 的讨论）：</p>
+<ol>
+<li>~~Piecewise = bucket + padding~~ → <strong>Piecewise = 按算子切分大图为子图</strong>（vLLM 0.6+ 含义）</li>
+<li>~~vLLM 不用 PDL 因为有 Graph~~ → <strong>vLLM 用 compilation 框架 + Piecewise 切分 + 算子融合 + 多后端编译</strong></li>
+<li>~~D3 整图可以录~~ → <strong>更准确：D3 不影响 Graph 录制，但 vLLM 还是用 Piecewise 切分，区别是切分粒度更细</strong></li>
+</ol>
+<hr />
+<h2 id="_8">参考文献 &amp; 延展学习<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>来源</th>
+<th>类型</th>
+<th>难度</th>
+<th>链接</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>vLLM Piecewise CUDA Graph 知乎文章</td>
+<td>blog</td>
+<td>intermediate</td>
+<td>https://zhuanlan.zhihu.com/p/1955402895890560120</td>
+</tr>
+<tr>
+<td>杨轶凡 PDL 中文实战</td>
+<td>blog</td>
+<td>intermediate</td>
+<td>https://zhuanlan.zhihu.com/p/1905474307014370232</td>
+</tr>
+<tr>
+<td>vLLM 官方 compilation 文档</td>
+<td>doc</td>
+<td>intermediate</td>
+<td>https://docs.vllm.ai/en/latest/features/computation_graph_compilation.html</td>
+</tr>
+<tr>
+<td>vLLM 论文 (SOSP 2023)</td>
+<td>paper</td>
+<td>advanced</td>
+<td>详细介绍 Continuous Batching + PagedAttention</td>
+</tr>
+<tr>
+<td>SGLang 论文 (NeurIPS 2024)</td>
+<td>paper</td>
+<td>advanced</td>
+<td>详细介绍 Piecewise CUDA Graph 在生产环境的应用</td>
+</tr>
+<tr>
+<td>MegaBlocks (Gale et al., 2023)</td>
+<td>paper</td>
+<td>advanced</td>
+<td>block-sparse matmul for MoE</td>
+</tr>
+<tr>
+<td>ScatterMoE (NVIDIA, 2024)</td>
+<td>paper</td>
+<td>advanced</td>
+<td>改进版 grouped GEMM</td>
+</tr>
+<tr>
+<td>FlashAttention (NeurIPS 2022)</td>
+<td>paper</td>
+<td>advanced</td>
+<td>解决 attention 的 padding 问题</td>
+</tr>
+<tr>
+<td>PyTorch Inductor CUDA Graph 实现</td>
+<td>code</td>
+<td>advanced</td>
+<td><code>pytorch/torch/_inductor/</code></td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="_9">关联页面<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h2>
+<ul>
+<li>2026-06-22_pdl — 上一代技术，本讲解的前置概念</li>
+<li>2026-06-22_megakernel — 与本讲解形成对比（绕开 Graph 限制的尝试）</li>
+<li>2026-06-22_kernel_tuning — L1 硬件层优化</li>
+<li>2026-06-22_ablation_study — 为什么 Megakernel 论文要被批评</li>
+<li>2026-06-22_cuda_graph_piecewise — 详细概念卡（待创建）</li>
+<li>2026-06-22_grouped_gemm — MoE 的关键解法（待创建）</li>
+</ul>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  回到页面顶部
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="页脚" >
+        
+          
+          <a href="../2026-06-23_fusion_tiling_layout/" class="md-footer__link md-footer__link--prev" aria-label="上一页: Fusion / Tiling / Layout 三元组">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                上一页
+              </span>
+              <div class="md-ellipsis">
+                Fusion / Tiling / Layout 三元组
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../2026-06-22_megakernel_vs_unfused/" class="md-footer__link md-footer__link--next" aria-label="下一页: Megakernel vs Unfused — 为什么 GPU 推理优化不能迷信&#34;大融合&#34;">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                下一页
+              </span>
+              <div class="md-ellipsis">
+                Megakernel vs Unfused — 为什么 GPU 推理优化不能迷信"大融合"
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2026 DragonFive
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.footer", "search.highlight", "search.share", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

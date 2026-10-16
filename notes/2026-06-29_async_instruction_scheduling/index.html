@@ -1,0 +1,2088 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="机器学习系统学习笔记 —— GPU 调度、Tensor Core、编译器与推理框架">
+      
+      
+      
+        <link rel="canonical" href="https://dragonfive.github.io/llm-notes/notes/2026-06-29_async_instruction_scheduling/">
+      
+      
+        <link rel="prev" href="../2026-07-02_wgmma_hopper_gemm/">
+      
+      
+        <link rel="next" href="../2026-06-25_warp_scheduler_deep_dive/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>指令调度代际跃迁：从同步锁资源到异步发令枪 - LLM Notes</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#_1" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../.." title="LLM Notes" class="md-header__button md-logo" aria-label="LLM Notes" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            LLM Notes
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              指令调度代际跃迁：从同步锁资源到异步发令枪
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="切换到深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="切换到深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="切换到浅色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="切换到浅色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/DragonFive/llm-notes" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DragonFive/llm-notes
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="LLM Notes" class="md-nav__button md-logo" aria-label="LLM Notes" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    LLM Notes
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/DragonFive/llm-notes" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DragonFive/llm-notes
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    首页
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    推理系统与分布式并行
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    推理系统与分布式并行
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-10-13_xllm_linear_tail_prefix_cache_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    深入解析 linear tail prefix cache
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-10-10_xllm_sfadcp_dcp_decode_attention_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SfaDcp:decode KV 分条注意力深潜
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU Kernel 与指令级
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    GPU Kernel 与指令级
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-07_gemm_ar_multimem_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GEMM+AR 融合与 multimem 通信深潜
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-06_mma-instruction-deep-dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MMA 指令深潜：线程分配、Fragment Layout 与数据流
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-04_tensor_core_ptx_pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tensor Core PTX 指令管线全拆解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-02_wgmma_hopper_gemm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WGMMA Hopper GEMM 完整讲解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    指令调度代际跃迁：从同步锁资源到异步发令枪
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    指令调度代际跃迁：从同步锁资源到异步发令枪
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景引入
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        前置概念解释
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="前置概念解释">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        必须知道的概念
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#warp-scheduler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        基础中的基础：Warp Scheduler 发射一条指令的完整流水线
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        核心讲解（金字塔结构）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="核心讲解（金字塔结构）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        结论先行：异步 ≠ 跑得快，异步 = 数据依赖在发射时已解除
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        展开解释：三代指令调度的进化
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="展开解释：三代指令调度的进化">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ampere-mma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第一代：Ampere MMA（同步调度）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hopper-wgmma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第二代：Hopper WGMMA（异步调度）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#blackwell-umma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第三代：Blackwell UMMA（异步 + 稀疏）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        对比：同步 vs 异步的本质区别
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#slot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        深层原理：Slot 与寄存器的绑定
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        多角度追问
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="多角度追问">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#q1-tensor-core-warp-scheduler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q1：如果所有指令全是 Tensor Core 指令，Warp Scheduler 会卡住吗？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q2tensor-core-wgmma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q2：Tensor Core 的内部指令队列能放多少条 WGMMA？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q3：异步调度是「计算单元跑得快」吗？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q4cuda-core" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q4：CUDA Core 也有自己的指令缓冲吗？为什么它不也异步？
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        边界与极端情况
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="边界与极端情况">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-warp-wgmma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景 1：所有驻留 Warp 都只有 WGMMA
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-tensor-core" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景 2：大量标量指令 + 少量 Tensor Core 指令
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-ampere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景 3：大量同步指令 + 无异步指令（Ampere 模式）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        总结：认知演进路线图
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        参考文献 &amp; 延展学习
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        相关概念
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-25_warp_scheduler_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Warp Scheduler 硬件架构全解析
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-24_gpu_scheduling_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU 调度深潜：TBS、Warp Scheduler 与延迟隐藏的完整拆解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-23_pytorch_compiler_stack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch 编译栈与 Lowering 层次映射
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-23_fusion_tiling_layout/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fusion / Tiling / Layout 三元组
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-22_pdl_vs_cudagraph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PDL vs CUDA Graph vs Piecewise CUDA Graph — LLM 推理 kernel launch overhead 优化全景
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-22_megakernel_vs_unfused/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Megakernel vs Unfused — 为什么 GPU 推理优化不能迷信"大融合"
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    编译器与图优化
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    编译器与图优化
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-12_inductor_fx_passes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inductor FX Passes — Lowering 之前的图级优化全景
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-09_inductor_ir_design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inductor IR 设计精髓 — Define-by-Run、闭包组合、V.ops 虚拟化
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景引入
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        前置概念解释
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="前置概念解释">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        必须知道的概念
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#warp-scheduler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        基础中的基础：Warp Scheduler 发射一条指令的完整流水线
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        核心讲解（金字塔结构）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="核心讲解（金字塔结构）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        结论先行：异步 ≠ 跑得快，异步 = 数据依赖在发射时已解除
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        展开解释：三代指令调度的进化
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="展开解释：三代指令调度的进化">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#ampere-mma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第一代：Ampere MMA（同步调度）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#hopper-wgmma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第二代：Hopper WGMMA（异步调度）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#blackwell-umma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第三代：Blackwell UMMA（异步 + 稀疏）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        对比：同步 vs 异步的本质区别
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#slot" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        深层原理：Slot 与寄存器的绑定
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        多角度追问
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="多角度追问">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#q1-tensor-core-warp-scheduler" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q1：如果所有指令全是 Tensor Core 指令，Warp Scheduler 会卡住吗？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q2tensor-core-wgmma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q2：Tensor Core 的内部指令队列能放多少条 WGMMA？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q3：异步调度是「计算单元跑得快」吗？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#q4cuda-core" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Q4：CUDA Core 也有自己的指令缓冲吗？为什么它不也异步？
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        边界与极端情况
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="边界与极端情况">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-warp-wgmma" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景 1：所有驻留 Warp 都只有 WGMMA
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-tensor-core" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景 2：大量标量指令 + 少量 Tensor Core 指令
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-ampere" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景 3：大量同步指令 + 无异步指令（Ampere 模式）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        总结：认知演进路线图
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        参考文献 &amp; 延展学习
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        相关概念
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="_1">指令调度代际跃迁：从同步锁资源到异步发令枪<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h1>
+<blockquote>
+<p>完整讲解，由陆铭视角回答。从 Ampere MMA 的同步调度 → Hopper WGMMA 的异步调度 → Blackwell UMMA 的终局形态。核心洞察：异步 ≠ 计算单元快，异步 = 数据依赖在发射时已解除。</p>
+<p>来源：知乎文章 <a href="https://zhuanlan.zhihu.com/p/1985061538705455012">Warp Scheduler 硬件设计</a> + Maxwell 的深度追问。</p>
+</blockquote>
+<hr />
+<h2 id="_2">场景引入<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<p>你 launch 了一个 CUDA kernel，里面有矩阵乘法。你心里清楚——Warp Scheduler 会把 WGMMA 指令发射给 Tensor Core，然后 Tensor Core 开始算。</p>
+<p>但你想过没有：<strong>Warp Scheduler 发射 WGMMA 的那一瞬间，它在等什么？它等完之后这个 Warp 还能被其他 Scheduler 选中吗？</strong> 如果 Tensor Core 正忙，Warp Scheduler 会卡住吗？</p>
+<p>这些问题的答案藏在一个更大的叙事里：<strong>NVIDIA 三代架构（Ampere → Hopper → Blackwell）在指令调度上的根本性转变——从「同步锁资源」到「异步发令枪」。</strong></p>
+<hr />
+<h2 id="_3">前置概念解释<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<h3 id="_4">必须知道的概念<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>概念</th>
+<th>一句话</th>
+<th>在哪里学</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Operand Collector</strong></td>
+<td>Warp Scheduler 中的操作数收集单元，从 Register File 读取数据</td>
+<td><code>2026-06-29_operand_collector</code></td>
+</tr>
+<tr>
+<td><strong>Scoreboard</strong></td>
+<td>Warp 内部的硬件标记表，记录每条 Warp 的寄存器依赖</td>
+<td><code>Warp Scheduler 硬件架构</code></td>
+</tr>
+<tr>
+<td><strong>Warp Slot</strong></td>
+<td>一个 Warp 在 Warp Scheduler 中的「占用」状态——与寄存器绑定</td>
+<td><code>Warp Scheduler 硬件架构</code></td>
+</tr>
+<tr>
+<td><strong>TMA</strong></td>
+<td>Hopper 架构引入的独立硬件单元——Tensor Memory Accelerator</td>
+<td><code>Warp Scheduler 硬件架构</code></td>
+</tr>
+<tr>
+<td><strong>LSU</strong></td>
+<td>Load/Store Unit —— 负责从 SMEM 搬运数据到计算单元的独立硬件</td>
+<td><code>Warp Scheduler 硬件架构</code></td>
+</tr>
+</tbody>
+</table>
+<h3 id="warp-scheduler">基础中的基础：Warp Scheduler 发射一条指令的完整流水线<a class="headerlink" href="#warp-scheduler" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>1. 取指 (Fetch) &amp; 解码 (Decode)
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>2. 发射仲裁 (Issue Arbitration)  —— 确定哪个就绪 Warp 能被选
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>3. 记分牌检查 (Scoreboard Check)  —— 源操作数是否就绪
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>4. 操作数收集 (Operand Collection) —— 从 Register File 读取数据
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>5. 执行 (Execution)                 —— CUDA Core / Tensor Core / LSU / SFU 计算
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>6. 写回 (Writeback)                 —— 结果写回 Register File
+</code></pre></div>
+<p><strong>关键</strong>：步骤 1-4 由 Warp Scheduler + Operand Collector 完成。步骤 5-6 由计算单元完成。</p>
+<hr />
+<h2 id="_5">核心讲解（金字塔结构）<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h2>
+<h3 id="_6">结论先行：异步 ≠ 跑得快，异步 = 数据依赖在发射时已解除<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h3>
+<p><strong>Ampere 的 MMA 指令是同步的</strong>：Warp Scheduler 必须确认所有操作数（A/B/C 矩阵数据）都从 Register File 就绪了，才发射。发射后这个 Warp 的 Slot 被占用，不能立即被其他 Scheduler 选中。</p>
+<p><strong>Hopper 的 WGMMA 是异步的</strong>：Warp Scheduler 只需要确认共享内存里的数据在就行（A/B 矩阵在 SMEM），发射后立即释放 Slot。剩下的数据搬运（TMA/LSU → SMEM → Tensor Core Buffer）完全不经过 Warp Scheduler。</p>
+<p><strong>不是「Tensor Core 跑得快所以要异步」——是「数据依赖在发射时已解除，所以 Warp Scheduler 不用等」。</strong></p>
+<hr />
+<h3 id="_7">展开解释：三代指令调度的进化<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h3>
+<h4 id="ampere-mma">第一代：Ampere MMA（同步调度）<a class="headerlink" href="#ampere-mma" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>Warp Scheduler 发射 WMMA
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    ↓ （Scoreboard：所有操作数就绪？）
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>    ↓ （等！寄存器数据还没到）
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    ↓ （Operand Collector：分 N 个周期从 RF 收集数据）
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>    ↓ （收集完毕 → 送入 Tensor Core）
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>    ↓ （Warp Scheduler：这条 Warp 的 Slot 一直被占用）
+</code></pre></div>
+<p><strong>同步调度的代价</strong>：</p>
+<ul>
+<li>Operand Collector 从 RF 收集操作数时，占着 Warp 的 Slot</li>
+<li>大量寄存器被锁定（A/B/C 矩阵全在寄存器）</li>
+<li>RF 读端口被争抢（一条 WMMA 可能有一百多个源操作数）</li>
+<li><strong>Warp Scheduler 不能同时在同一个 Warp 上发射另一条指令</strong></li>
+</ul>
+<h4 id="hopper-wgmma">第二代：Hopper WGMMA（异步调度）<a class="headerlink" href="#hopper-wgmma" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>Warp Scheduler 发射 WGMMA
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>    ↓ （Scoreboard：A/B 矩阵在 SMEM ✓ → 就绪）
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>    ↓ （不需要等数据——TMA 在后台搬运）
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>    ↓ （立即释放 Slot！Warp Scheduler 可以看下一个 Warp）
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>    ↓
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>TMA/LSU 独立从 SMEM 搬运 A/B 数据到 Tensor Core Buffer
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>    ↓ （不经过 Warp Scheduler、不占 RF 读端口）
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>Tensor Core 开始计算
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>    ↓ （Tensor Core 内部指令队列自己管理）
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>结果写回 C/D 寄存器（由 LSU 完成）
+</code></pre></div>
+<p><strong>异步调度的本质</strong>：</p>
+<ul>
+<li>Warp Scheduler 发射后 <strong>不等待数据搬运</strong>、<strong>不等待计算完成</strong></li>
+<li>数据搬运（TMA/LSU）和计算（Tensor Core）独立并行</li>
+<li>不消耗 Warp Scheduler slot、不占用 Register File 读端口</li>
+<li><strong>最终通过显式同步指令（<code>__syncthreads</code> 或 barrier）来同步</strong></li>
+</ul>
+<h4 id="blackwell-umma">第三代：Blackwell UMMA（异步 + 稀疏）<a class="headerlink" href="#blackwell-umma" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>Warp Scheduler 发射 UMMA
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>    ↓ （额外需要 E 矩阵：稀疏元数据）
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    ↓ （A 矩阵 + E 矩阵同时在 SMEM）
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    ↓ （立即释放 Slot）
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    ↓
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>TMA/LSU 同时搬运 A 压缩数据 + E 稀疏元数据
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>    ↓
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>Tensor Core 内部用 E 矩阵解压 A → 恢复稠密 → 矩阵乘法
+</code></pre></div>
+<p><strong>UMMA 的新增复杂度</strong>：</p>
+<ul>
+<li>支持稀疏特性 → Operand Collector 需要额外收集 E 矩阵</li>
+<li>E 矩阵在 Tensor Core 内部指导压缩数据的解压与索引映射</li>
+<li>硬件同时读 A 和 E，元数据用于解压稀疏矩阵</li>
+</ul>
+<hr />
+<h3 id="vs">对比：同步 vs 异步的本质区别<a class="headerlink" href="#vs" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Ampere MMA（同步）</th>
+<th>Hopper WGMMA（异步）</th>
+<th>Blackwell UMMA（异步+稀疏）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>发射前</strong></td>
+<td>Scoreboard：所有操作数就绪？</td>
+<td>Scoreboard：SMEM 数据在？</td>
+<td>Scoreboard：SMEM+E 在？</td>
+</tr>
+<tr>
+<td><strong>发射后</strong></td>
+<td>占用 Warp Slot</td>
+<td><strong>不占 Slot</strong></td>
+<td>不占 Slot</td>
+</tr>
+<tr>
+<td><strong>数据来源</strong></td>
+<td>Register File</td>
+<td>Shared Memory</td>
+<td>SMEM + E 矩阵</td>
+</tr>
+<tr>
+<td><strong>数据搬运者</strong></td>
+<td>Operand Collector（走 RF）</td>
+<td>TMA/LSU（走 SMEM）</td>
+<td>TMA/LSU（SMEM+A+E）</td>
+</tr>
+<tr>
+<td><strong>搬运行走</strong></td>
+<td>经过 RF 读端口</td>
+<td>绕过 RF</td>
+<td>绕过 RF</td>
+</tr>
+<tr>
+<td><strong>同步方式</strong></td>
+<td>硬件隐式同步</td>
+<td>显式同步指令</td>
+<td>显式同步指令</td>
+</tr>
+<tr>
+<td><strong>Warp 释放</strong></td>
+<td>发射后不能立即被选中</td>
+<td><strong>发射后立即释放</strong></td>
+<td>立即释放</td>
+</tr>
+<tr>
+<td><strong>rf 读端口</strong></td>
+<td>需要</td>
+<td>不需要</td>
+<td>不需要</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h3 id="slot">深层原理：Slot 与寄存器的绑定<a class="headerlink" href="#slot" title="Permanent link">&para;</a></h3>
+<p><strong>Warp Slot 是 Warp 在 Warp Scheduler 中的「占用」状态。</strong> 这个状态与 Warp 的<strong>寄存器占用</strong>直接绑定。</p>
+<p><strong>标量指令（FADD/FFMA）发射后</strong>：</p>
+<ul>
+<li>目标寄存器被 Scoreboard 标记为「占用」</li>
+<li>这条 Warp 不能立即被其他 Scheduler 选中</li>
+<li>Operand Collector 在 RF 上收集数据时，这条 Warp 的 Slot 一直被占用</li>
+</ul>
+<p><strong>WGMMA 发射后</strong>：</p>
+<ul>
+<li>A/B 矩阵在 SMEM，不在寄存器 → 不标记寄存器</li>
+<li>C/D 在寄存器 → 标记 C/D</li>
+<li>但「标记 C/D」不代表整个 Warp 不能动——Warp Scheduler 可以选这个 Warp 的<strong>其他指令</strong>（只要不依赖 WGMMA 的目标寄存器 C/D）</li>
+</ul>
+<p><strong>核心公式</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>Slot 被占 = 寄存器被占（标量指令）
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>Slot 不占 = 寄存器没被占（WGMMA：A/B 在 SMEM）
+</code></pre></div>
+<hr />
+<h2 id="_8">多角度追问<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h2>
+<h3 id="q1-tensor-core-warp-scheduler">Q1：如果所有指令全是 Tensor Core 指令，Warp Scheduler 会卡住吗？<a class="headerlink" href="#q1-tensor-core-warp-scheduler" title="Permanent link">&para;</a></h3>
+<p><strong>不会——因为 Warp Scheduler 只看「Warp 就绪」，不看「计算单元忙不忙」。</strong></p>
+<p>但这有一个前提：<strong>SM 上驻留了足够多的 Warp（比如 64 个），且其中至少有一个 Warp 的标量指令就绪，能为 Warp Scheduler 提供可发射的指令。</strong></p>
+<p>如果所有驻留 Warp 同时都不可发射（都在等数据依赖解除）→ Warp Scheduler 才会空闲。但在正常 kernel 中，这种极端情况很少发生。</p>
+<h3 id="q2tensor-core-wgmma">Q2：Tensor Core 的内部指令队列能放多少条 WGMMA？<a class="headerlink" href="#q2tensor-core-wgmma" title="Permanent link">&para;</a></h3>
+<p><strong>有限，不是无数条——但深到在 HMMA 延迟（16-32 cycle）窗口内不会满。</strong></p>
+<p>推论：
+- 如果指令队列深度为 8 条，且每个 Warp 连续发 8 条 WGMMA
+- 这 8 条在 Tensor Core 内部排队（32 cycle 窗口）
+- Warp Scheduler 在这个窗口中已切到其他 Warp 做标量计算
+- 指令队列满的条件：Tensor Core 被塞满了，下一个 Warp 的 WGMMA 进不去 → Port Arbitration 拒绝 → <strong>Warp Scheduler 被阻止发射</strong>（但这种冲突极少）</p>
+<h3 id="q3">Q3：异步调度是「计算单元跑得快」吗？<a class="headerlink" href="#q3" title="Permanent link">&para;</a></h3>
+<p><strong>不是。</strong> 真正的设计逻辑是：</p>
+<ol>
+<li><strong>标量指令（FADD/FFMA）</strong>：数据来自 RF，依赖长 → 同步</li>
+<li><strong>Tensor Core 指令（WGMMA）</strong>：数据来自 SMEM，依赖短 → 可以异步</li>
+</ol>
+<p><strong>不是因为 Tensor Core 跑得快所以让它异步，而是因为数据已经在 SMEM 了，所以发射时不需要等 Operand Collector 从 RF 收集数据。</strong> 异步调度 = 数据依赖在发射时已解除 = Warp Scheduler 不用等。</p>
+<h3 id="q4cuda-core">Q4：CUDA Core 也有自己的指令缓冲吗？为什么它不也异步？<a class="headerlink" href="#q4cuda-core" title="Permanent link">&para;</a></h3>
+<p><strong>CUDA Core 也有自己的指令缓冲（FIFO）。</strong> 但它的指令是同步的——原因不在于缓冲大小，而在于：</p>
+<ul>
+<li><strong>CUDA Core 的指令操作数在 Register File 中</strong> → 发射时 Operand Collector 需要在 RF 上收集数据</li>
+<li><strong>这个过程占 RF 读端口</strong> → 这条 Warp 的 Slot 暂时不能释放</li>
+<li><strong>而 Tensor Core 的 WGMMA 操作数在 SMEM 中</strong> → 发射时不经过 RF</li>
+<li><strong>TMA/LSU 独立搬运数据</strong> → 不占 RF 读端口 → Slot 立即释放</li>
+</ul>
+<p>所以「所有计算单元都有内部指令缓冲」是对的，但「只有 Tensor Core 的指令可以异步」的根本原因不是缓冲大小——<strong>是数据是否在 RF 中。</strong></p>
+<hr />
+<h2 id="_9">边界与极端情况<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h2>
+<h3 id="1-warp-wgmma">场景 1：所有驻留 Warp 都只有 WGMMA<a class="headerlink" href="#1-warp-wgmma" title="Permanent link">&para;</a></h3>
+<p>如果 SM 上 64 个 Warp 全都执行 WGMMA，没有标量指令可发射：
+- Warp Scheduler 发完第一条 WGMMA 后切到第二个 Warp → 再发 WGMMA → 再切...
+- 但 Tensor Core 被填满了（指令缓冲满）
+- 下一个 WGMMA 发射时 Port Arbitration 拒绝 → Warp Scheduler 短暂空闲（极少发生）
+- 在正常 kernel 中，Warp 之间通常穿插标量指令（load/store/算），这种极端情况几乎不会出现</p>
+<h3 id="2-tensor-core">场景 2：大量标量指令 + 少量 Tensor Core 指令<a class="headerlink" href="#2-tensor-core" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>Warp Scheduler 发 WGMMA → 立即释放 Slot
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>    ↓
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>切换到 Warp B 发 FADD（同步，占 Slot）
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a>    ↓
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a>Warp B 的 FADD 执行完成 → 释放 Slot
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>    ↓
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>Warp Scheduler 切换到 Warp C 发 WGMMA → 立即释放 Slot
+</code></pre></div>
+<p><strong>结果</strong>：Warp Scheduler 在 WGMMA 和标量指令之间无缝切换，始终不阻塞。</p>
+<h3 id="3-ampere">场景 3：大量同步指令 + 无异步指令（Ampere 模式）<a class="headerlink" href="#3-ampere" title="Permanent link">&para;</a></h3>
+<p>如果所有指令都是同步的（Ampere 时代）：
+- 每条指令发射后占用 Slot
+- 如果某个 Warp 的 Operand Collector 在 RF 上收集数据（6-8 cycle），其他 Scheduler 只能选其他就绪 Warp
+- 依赖 Occupancy（驻留 Warp 数）来提供足够的就绪 Warp 数量
+- 如果没有足够的就绪 Warp → Warp Scheduler 空闲 → 利用率下降</p>
+<hr />
+<h2 id="_10">总结：认知演进路线图<a class="headerlink" href="#_10" title="Permanent link">&para;</a></h2>
+<p>从 Ampere 到 Hopper 到 Blackwell，这不是单纯的「硬件更快了」——这是<strong>指令调度模式的根本性转变</strong>：</p>
+<ol>
+<li><strong>Ampere（同步）</strong>：Warp Scheduler 发射前必须确认所有操作数就绪 → 占用 Slot → 依赖 Operand Collector 从 RF 收集数据</li>
+<li><strong>Hopper（异步）</strong>：Warp Scheduler 只发 trigger 不等待 → 立即释放 Slot → TMA/LSU 独立搬运数据 → Tensor Core 独立计算</li>
+<li><strong>Blackwell（异步+稀疏）</strong>：同 Hopper，但额外需要 E 矩阵（稀疏元数据）→ 硬件同时读 A 和 E → 在 Tensor Core 内解压</li>
+</ol>
+<p><strong>核心公式</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>Slot 被占 = 寄存器被占（标量指令：数据在 RF 中）
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>Slot 不占 = 寄存器没被占（WGMMA：A/B 在 SMEM 中）
+</code></pre></div>
+<p><strong>为什么需要异步调度</strong>：如果数据已经在 SMEM 了，就没有理由让 Warp Scheduler 等 RF 读数据——那纯粹是浪费调度带宽。</p>
+<hr />
+<h2 id="_11">参考文献 &amp; 延展学习<a class="headerlink" href="#_11" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>来源</th>
+<th>类型</th>
+<th>难度</th>
+<th>链接</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>带你从零入门Warp Scheduler硬件设计（知乎）</td>
+<td>blog</td>
+<td>intermediate</td>
+<td>https://zhuanlan.zhihu.com/p/1985061538705455012</td>
+</tr>
+<tr>
+<td>NVIDIA Hopper Architecture Whitepaper</td>
+<td>官方文档</td>
+<td>advanced</td>
+<td>https://developer.nvidia.com/blog/nvidia-hopper-architecture-in-depth/</td>
+</tr>
+<tr>
+<td>Analyzing and Improving Hardware Modeling of Accel-Sim</td>
+<td>论文</td>
+<td>advanced</td>
+<td>https://arxiv.org/html/2401.10082v1</td>
+</tr>
+<tr>
+<td>NVIDIA Ampere Architecture Whitepaper</td>
+<td>官方文档</td>
+<td>advanced</td>
+<td>NVIDIA 官网</td>
+</tr>
+<tr>
+<td>GPU Warp Scheduler 硬件架构全解析（知乎）</td>
+<td>blog</td>
+<td>intermediate</td>
+<td>https://zhuanlan.zhihu.com/p/2053030307369050357</td>
+</tr>
+<tr>
+<td>CUDA C++ Programming Guide (v12.x)</td>
+<td>官方文档</td>
+<td>intermediate</td>
+<td>NVIDIA 官网</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_12">相关概念<a class="headerlink" href="#_12" title="Permanent link">&para;</a></h2>
+<ul>
+<li>2026-06-29_operand_collector — 操作数收集单元：从 Register File 读取数据到执行单元</li>
+<li>Warp Scheduler 硬件架构 — Warp Scheduler 完整流水线：6 级（取指 → 发射仲裁 → 记分牌 → 操作数收集 → 执行 → 写回）</li>
+<li>2026-06-24_gpu_scheduling_deep_dive — TBS、Warp Scheduler、Occupancy、Dispatch Unit、Port Arbitration 全链路</li>
+<li>2026-06-24_occupancy — SM 驻留 Warp 占比：衡量延迟隐藏空间</li>
+<li>2026-06-23_triton_programming_model — Triton Block-Level 编程模型（Block 分配的上层视角）</li>
+</ul>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  回到页面顶部
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="页脚" >
+        
+          
+          <a href="../2026-07-02_wgmma_hopper_gemm/" class="md-footer__link md-footer__link--prev" aria-label="上一页: WGMMA Hopper GEMM 完整讲解">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                上一页
+              </span>
+              <div class="md-ellipsis">
+                WGMMA Hopper GEMM 完整讲解
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../2026-06-25_warp_scheduler_deep_dive/" class="md-footer__link md-footer__link--next" aria-label="下一页: Warp Scheduler 硬件架构全解析">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                下一页
+              </span>
+              <div class="md-ellipsis">
+                Warp Scheduler 硬件架构全解析
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2026 DragonFive
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.footer", "search.highlight", "search.share", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

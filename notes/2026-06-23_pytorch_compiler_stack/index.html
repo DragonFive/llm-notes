@@ -1,0 +1,2111 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="机器学习系统学习笔记 —— GPU 调度、Tensor Core、编译器与推理框架">
+      
+      
+      
+        <link rel="canonical" href="https://dragonfive.github.io/llm-notes/notes/2026-06-23_pytorch_compiler_stack/">
+      
+      
+        <link rel="prev" href="../2026-06-24_gpu_scheduling_deep_dive/">
+      
+      
+        <link rel="next" href="../2026-06-23_fusion_tiling_layout/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>PyTorch 编译栈与 Lowering 层次映射 - LLM Notes</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#pytorch-lowering" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../.." title="LLM Notes" class="md-header__button md-logo" aria-label="LLM Notes" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            LLM Notes
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              PyTorch 编译栈与 Lowering 层次映射
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="切换到深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="切换到深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="切换到浅色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="切换到浅色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/DragonFive/llm-notes" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DragonFive/llm-notes
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="LLM Notes" class="md-nav__button md-logo" aria-label="LLM Notes" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    LLM Notes
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/DragonFive/llm-notes" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DragonFive/llm-notes
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    首页
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    推理系统与分布式并行
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    推理系统与分布式并行
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-10-13_xllm_linear_tail_prefix_cache_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    深入解析 linear tail prefix cache
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-10-10_xllm_sfadcp_dcp_decode_attention_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SfaDcp:decode KV 分条注意力深潜
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU Kernel 与指令级
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    GPU Kernel 与指令级
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-07_gemm_ar_multimem_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GEMM+AR 融合与 multimem 通信深潜
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-06_mma-instruction-deep-dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MMA 指令深潜：线程分配、Fragment Layout 与数据流
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-04_tensor_core_ptx_pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tensor Core PTX 指令管线全拆解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-02_wgmma_hopper_gemm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WGMMA Hopper GEMM 完整讲解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-29_async_instruction_scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    指令调度代际跃迁：从同步锁资源到异步发令枪
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-25_warp_scheduler_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Warp Scheduler 硬件架构全解析
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-24_gpu_scheduling_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU 调度深潜：TBS、Warp Scheduler 与延迟隐藏的完整拆解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch 编译栈与 Lowering 层次映射
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch 编译栈与 Lowering 层次映射
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景引入
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        前置概念解释
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        核心讲解
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="核心讲解">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#lowering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lowering 的三层模型
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pytorch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PyTorch 组件的精确映射
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        结论先行：七组件三分类
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        逐组件拆解
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="逐组件拆解">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-torchdynamo-graph-capture-lowering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. TorchDynamo → Graph Capture 层（Lowering 之前）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-aotautograd-graph-capture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. AOTAutograd → Graph Capture 层的辅助
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-torchinductor-graph-operator-codegen" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. TorchInductor → Graph + Operator + Codegen 全链路
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#inductor-codegen-ptx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inductor 的 Codegen 输出 ≠ PTX
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-torchair-ge-ascend-graph-optimization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. TorchAir + GE → Ascend 路径的 Graph Optimization
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-aclnn-lowering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. aclnn → 预编译算子库（Lowering 的"终点产物"）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-cudagraph-runtime-lowering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. CUDAGraph → Runtime 层（完全不在 Lowering 链上）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-aotautograd-graph-capture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. AOTAutograd → Graph Capture 层的辅助
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#triton-inductor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        手写 Triton 与 Inductor 自动生成的关系
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="手写 Triton 与 Inductor 自动生成的关系">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        两种使用方式
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        为什么手写？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#flashattention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        从 FlashAttention 的演进看
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#triton-cuda" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Triton 与 CUDA 的对比
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        总结映射表
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        多角度追问
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        边界与极端情况
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        参考文献 &amp; 延展学习
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-23_fusion_tiling_layout/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fusion / Tiling / Layout 三元组
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-22_pdl_vs_cudagraph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PDL vs CUDA Graph vs Piecewise CUDA Graph — LLM 推理 kernel launch overhead 优化全景
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-22_megakernel_vs_unfused/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Megakernel vs Unfused — 为什么 GPU 推理优化不能迷信"大融合"
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    编译器与图优化
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    编译器与图优化
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-12_inductor_fx_passes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inductor FX Passes — Lowering 之前的图级优化全景
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-09_inductor_ir_design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inductor IR 设计精髓 — Define-by-Run、闭包组合、V.ops 虚拟化
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景引入
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        前置概念解释
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        核心讲解
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="核心讲解">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#lowering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Lowering 的三层模型
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pytorch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PyTorch 组件的精确映射
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        结论先行：七组件三分类
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        逐组件拆解
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="逐组件拆解">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#1-torchdynamo-graph-capture-lowering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. TorchDynamo → Graph Capture 层（Lowering 之前）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#2-aotautograd-graph-capture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. AOTAutograd → Graph Capture 层的辅助
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#3-torchinductor-graph-operator-codegen" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. TorchInductor → Graph + Operator + Codegen 全链路
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#inductor-codegen-ptx" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Inductor 的 Codegen 输出 ≠ PTX
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#4-torchair-ge-ascend-graph-optimization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. TorchAir + GE → Ascend 路径的 Graph Optimization
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#5-aclnn-lowering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. aclnn → 预编译算子库（Lowering 的"终点产物"）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#6-cudagraph-runtime-lowering" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        6. CUDAGraph → Runtime 层（完全不在 Lowering 链上）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#7-aotautograd-graph-capture" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        7. AOTAutograd → Graph Capture 层的辅助
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#triton-inductor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        手写 Triton 与 Inductor 自动生成的关系
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="手写 Triton 与 Inductor 自动生成的关系">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        两种使用方式
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        为什么手写？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#flashattention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        从 FlashAttention 的演进看
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#triton-cuda" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Triton 与 CUDA 的对比
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        总结映射表
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        多角度追问
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        边界与极端情况
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        参考文献 &amp; 延展学习
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="pytorch-lowering">PyTorch 编译栈与 Lowering 层次映射<a class="headerlink" href="#pytorch-lowering" title="Permanent link">&para;</a></h1>
+<h2 id="_1">场景引入<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>你一定见过这几个名字：Dynamo、Inductor、CUDAGraph、TorchAir、GE、aclnn……它们在 PyTorch 的编译和推理流程中各司其职，但互相之间的关系是什么？谁在做 2026-06-23_lowering？谁只是个运行时优化？</p>
+<p>这篇讲解把 PyTorch 编译栈的组件，精确映射到 2026-06-23_lowering 的三层模型上，让你一眼看清每个组件"住"在哪一层。</p>
+<h2 id="_2">前置概念解释<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>2026-06-23_lowering</strong>：编译器将高抽象表示逐步降低到低抽象表示的过程。分三级：Graph Lowering → Operator Lowering → Instruction Lowering</li>
+<li><strong>Fusion/Tiling/Layout</strong>：AI 编译器的三大核心优化维度，分别在 lowering 的不同阶段发挥作用</li>
+<li><strong>FX Graph</strong>：PyTorch 的中间表示，由 Dynamo 从 Python 代码中捕获</li>
+<li><strong>Triton</strong>：OpenAI 开发的 GPU kernel DSL，Inductor 的代码生成目标</li>
+<li><strong>Triton 编译器</strong>：将 Triton Python 代码编译为 PTX，再由 NVIDIA 驱动编译为 SASS（GPU 可执行二进制）</li>
+<li><strong>GE（Graph Engine）</strong>：华为昇腾的图编译引擎</li>
+<li><strong>aclnn</strong>：昇腾算子库（Ascend Computing Library for Neural Network），类似 NVIDIA 的 cuDNN/cuBLAS</li>
+</ul>
+<h2 id="_3">核心讲解<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h2>
+<h3 id="lowering">Lowering 的三层模型<a class="headerlink" href="#lowering" title="Permanent link">&para;</a></h3>
+<p>在深入 PyTorch 组件之前，先理解 lowering 的完整层次结构：</p>
+<p><img alt="lowering_layers" src="../../assets/lowering_layers.svg" /></p>
+<p><strong>核心洞察</strong>：Lowering 不是一步到位的映射，而是"逐层下降"的流水线，每一层都引入更多硬件细节（存储层次、并行结构、指令集）。</p>
+<h3 id="pytorch">PyTorch 组件的精确映射<a class="headerlink" href="#pytorch" title="Permanent link">&para;</a></h3>
+<p>下面这张图展示了 PyTorch 编译栈的 7 个组件分别落在 lowering 层次的哪个位置：</p>
+<p><img alt="pytorch_compiler_stack" src="../../assets/pytorch_compiler_stack.svg" /></p>
+<h3 id="_4">结论先行：七组件三分类<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h3>
+<p>PyTorch 编译栈的 7 个组件，可以分为三大类：</p>
+<ol>
+<li><strong>做 Lowering 的</strong>：Inductor（NVIDIA 路径）、GE（Ascend 路径）—— 它们是编译的"重活担当"</li>
+<li><strong>做 Graph Capture 的</strong>：Dynamo、AOTAutograd、TorchAir —— 它们是 lowering 的"起点"或"桥梁"</li>
+<li><strong>不做 Lowering 的</strong>：aclnn（预编译产物）、CUDAGraph（运行时优化）</li>
+</ol>
+<h3 id="_5">逐组件拆解<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h3>
+<h4 id="1-torchdynamo-graph-capture-lowering">1. TorchDynamo → Graph Capture 层（Lowering 之前）<a class="headerlink" href="#1-torchdynamo-graph-capture-lowering" title="Permanent link">&para;</a></h4>
+<p><strong>做什么</strong>：用 CPython 的 Frame Evaluation API hook 进 Python 字节码，把 <code>torch.add</code>、<code>torch.matmul</code> 这些调用捕获成 FX Graph。</p>
+<p><strong>不做 Lowering</strong>：Dynamo 做的是 <strong>lift</strong>（提升），把 Python 动态语义"提升"成一张静态图。它是 lowering 的<strong>起点</strong>，但本身不是 lowering。</p>
+<p><strong>类比</strong>：Dynamo 像一个速记员——你口述 Python 代码，它记录成一张"谁连着谁"的计算图。速记员不理解计算的含义，只记录结构。</p>
+<h4 id="2-aotautograd-graph-capture">2. AOTAutograd → Graph Capture 层的辅助<a class="headerlink" href="#2-aotautograd-graph-capture" title="Permanent link">&para;</a></h4>
+<p><strong>做什么</strong>：在 Dynamo 捕获前向图之后，用 <code>torch.autograd</code> 的 trace 机制推导出反向计算图，把前向+反向合并成一个大的 FX Graph，再交给 Inductor。</p>
+<p><strong>不做 Lowering</strong>：它是在 Graph Capture 层做<strong>图的补全</strong>——没有它，Inductor 只能看到前向图，不知道反向怎么算。</p>
+<p><strong>类比</strong>：AOTAutograd 像一个"补画师"——你画了前半幅画，它根据画法规则自动补出后半幅。</p>
+<h4 id="3-torchinductor-graph-operator-codegen">3. TorchInductor → Graph + Operator + Codegen 全链路<a class="headerlink" href="#3-torchinductor-graph-operator-codegen" title="Permanent link">&para;</a></h4>
+<p><strong>做什么</strong>：整个编译栈的"重活担当"，覆盖了 lowering 的三个阶段：</p>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>Inductor 做的事</th>
+<th>对应 Lowering 层</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Graph Lowering</td>
+<td>FX Graph → Loop-level IR（<code>sched.HardwareBuffer</code>、<code>sched.IRNode</code>），做 fusion 决策</td>
+<td>Graph Lowering</td>
+</tr>
+<tr>
+<td>Operator Lowering</td>
+<td>融合后的 IR → 循环嵌套展开、tile 大小选择、memory planning</td>
+<td>Operator Lowering</td>
+</tr>
+<tr>
+<td>Codegen</td>
+<td>IR → <strong>Triton kernel 代码</strong>（NVIDIA）或 <strong>C++ 模板</strong>（CPU）</td>
+<td>Instruction Lowering</td>
+</tr>
+</tbody>
+</table>
+<p><strong>关键特征</strong>：Inductor 是 <strong>JIT 生成 kernel</strong>——它不是调用预编译的算子，而是根据当前输入的 shape 动态生成代码。这意味着 fusion 的边界可以灵活打破。</p>
+<h4 id="inductor-codegen-ptx">Inductor 的 Codegen 输出 ≠ PTX<a class="headerlink" href="#inductor-codegen-ptx" title="Permanent link">&para;</a></h4>
+<p>这里有一个常见的误解：Inductor 生成的是 <strong>Triton Python 代码</strong>，不是 PTX。</p>
+<p><strong>完整链路</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>Inductor IR  
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>    ↓ Codegen
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>Triton Python 代码  ← Inductor 的输出边界在这里
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>    ↓ Triton 编译器（运行时 JIT）
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>Triton IR (MLIR dialect)
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>    ↓ 优化（tiling、shared memory）
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>LLVM IR
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>    ↓ LLVM 后端
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>PTX (Parallel Thread Execution)
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>    ↓ NVIDIA 驱动 JIT
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>SASS (最终 GPU 执行的二进制)
+</code></pre></div>
+<p><strong>两层 JIT</strong>：
+1. <strong>Inductor JIT</strong>（编译期）：生成 Triton Python 代码
+2. <strong>Triton JIT</strong>（运行时）：Triton 编译器把 Python 代码编译为 PTX/SASS</p>
+<blockquote>
+<p>[!insight] 为什么 Inductor 不直接生成 PTX？
+- <strong>灵活性</strong>：Triton 是更高层抽象，Inductor 专注算子融合、tiling 策略等高层优化，不用关心寄存器分配、指令调度
+- <strong>可移植性</strong>：Triton 编译器可以编译到 NVIDIA/AMD/Intel 等不同后端
+- <strong>迭代速度</strong>：Triton 编译器独立演进，新硬件支持不需要改 Inductor</p>
+</blockquote>
+<p>实际部署中，Inductor 配合 <strong>compile cache</strong>——首次编译后缓存 Triton 生成的 <code>.cubin</code>（SASS 二进制），后续直接加载，跳过 Triton 编译步骤。这也是为什么你可能误以为 Inductor 直接生成了 SASS。</p>
+<h4 id="4-torchair-ge-ascend-graph-optimization">4. TorchAir + GE → Ascend 路径的 Graph Optimization<a class="headerlink" href="#4-torchair-ge-ascend-graph-optimization" title="Permanent link">&para;</a></h4>
+<p><strong>做什么</strong>：</p>
+<ul>
+<li><strong>TorchAir</strong>：把 Dynamo 导出的 FX Graph 转成昇腾的图 IR，喂给 GE</li>
+<li><strong>GE</strong>：华为昇腾的图编译器，做算子融合、内存规划、tiling 策略选择，然后调度 aclnn 算子执行</li>
+</ul>
+<p><strong>与 Inductor 的对比</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Inductor（NVIDIA）</th>
+<th>GE（Ascend）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Fusion 方式</td>
+<td>JIT 生成新 kernel，可灵活打破算子边界</td>
+<td>调用预编译的 aclnn 算子，受限于算子库的边界</td>
+</tr>
+<tr>
+<td>Tiling</td>
+<td>自动搜索 tile 大小</td>
+<td>GE 内置 tiling 策略 + auto-tuning</td>
+</tr>
+<tr>
+<td>Codegen</td>
+<td>生成 Triton 代码 → 编译为 PTX</td>
+<td>选择 aclnn 算子 + 传参</td>
+</tr>
+<tr>
+<td>灵活性</td>
+<td>高（任意算子组合）</td>
+<td>受限于 aclnn 算子库覆盖</td>
+</tr>
+</tbody>
+</table>
+<h4 id="5-aclnn-lowering">5. aclnn → 预编译算子库（Lowering 的"终点产物"）<a class="headerlink" href="#5-aclnn-lowering" title="Permanent link">&para;</a></h4>
+<p><strong>做什么</strong>：华为昇腾的算子库，类似 NVIDIA 的 cuDNN/cuBLAS。</p>
+<p><strong>不做 Lowering</strong>：aclnn 是 lowering 的<strong>终点产物</strong>之一。GE 在做 Graph Optimization 时决定调用哪个 aclnn 算子、传什么参数，但 aclnn 本身是已经编译好的二进制。</p>
+<blockquote>
+<p>[!insight] JIT vs 预编译的本质区别
+Inductor 是 JIT 生成 kernel 代码 → fusion 可以打破算子边界，灵活组合。
+aclnn 是调预编译好的 kernel → fusion 的边界被算子库的 API 边界锁死，只能组合已有的算子。
+这就像：JIT 是"现炒"，想加什么料随时加；预编译是"点菜"，只能选菜单上有的组合。</p>
+</blockquote>
+<h4 id="6-cudagraph-runtime-lowering">6. CUDAGraph → Runtime 层（完全不在 Lowering 链上）<a class="headerlink" href="#6-cudagraph-runtime-lowering" title="Permanent link">&para;</a></h4>
+<p><strong>做什么</strong>：把一系列 CUDA kernel launch 捕获成一个图，然后一次性提交给 GPU 执行，消除 CPU-GPU 之间的 launch overhead。</p>
+<p><strong>不做 Lowering</strong>：它跟编译期的 lowering 没有任何关系——它是在<strong>运行时</strong>把已经编译好的 kernel 串重新组织执行顺序。对应文章里说的"Runtime 层：暴露 stream、event、graph"。</p>
+<p><strong>类比</strong>：CUDAGraph 像一个"快递分拣站"——快递（kernel）已经打包好了，它只负责按最优路线一次发出，不改变包裹内容。</p>
+<h4 id="7-aotautograd-graph-capture">7. AOTAutograd → Graph Capture 层的辅助<a class="headerlink" href="#7-aotautograd-graph-capture" title="Permanent link">&para;</a></h4>
+<p><strong>做什么</strong>：在 Dynamo 捕获前向图之后，用 <code>torch.autograd</code> 的 trace 机制推导出反向计算图，把前向+反向合并成一个大的 FX Graph，再交给 Inductor。</p>
+<p><strong>不做 Lowering</strong>：它是在 Graph Capture 层做<strong>图的补全</strong>——没有它，Inductor 只能看到前向图，不知道反向怎么算。</p>
+<p><strong>类比</strong>：AOTAutograd 像一个"补画师"——你画了前半幅画，它根据画法规则自动补出后半幅。</p>
+<h3 id="triton-inductor">手写 Triton 与 Inductor 自动生成的关系<a class="headerlink" href="#triton-inductor" title="Permanent link">&para;</a></h3>
+<p>前面讲了 Inductor 自动生成 Triton 代码，那既然能自动生成，为什么还有人直接手写 Triton kernel？（比如 Tri Dao 在 FlashAttention 2 中手写 Triton）</p>
+<p>这涉及 <strong>Triton 作为编译器后端</strong> 与 <strong>Triton 作为 Kernel DSL</strong> 两种使用方式。</p>
+<h4 id="_6">两种使用方式<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h4>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>Inductor 自动生成（方式一）</th>
+<th>手写 Triton（方式二）</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>你写的代码</td>
+<td>PyTorch Python</td>
+<td>Triton Python</td>
+</tr>
+<tr>
+<td>tiling/shmem 控制</td>
+<td>Inductor 决定</td>
+<td><strong>你决定</strong></td>
+</tr>
+<tr>
+<td>适用场景</td>
+<td>90% 标准模型</td>
+<td>创新算子、极致优化、研究</td>
+</tr>
+<tr>
+<td>开发速度</td>
+<td>快</td>
+<td>慢（需理解 GPU 编程）</td>
+</tr>
+<tr>
+<td>性能天花板</td>
+<td>中上（自动优化有局限）</td>
+<td>高（完全控制）</td>
+</tr>
+</tbody>
+</table>
+<h4 id="_7">为什么手写？<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h4>
+<ol>
+<li><strong>创新算子</strong>：Inductor 能自动识别的 fusion pattern 是有限的。当你发明了一个全新的算子（如 FlashAttention 的 attention 融合方式），Inductor 根本不知道这种 pattern，必须手写 Triton kernel 来探索和实现。</li>
+<li><strong>极致优化</strong>：某些场景需要手工微调 tiling 策略、shared memory 使用方式，才能达到硬件极限。Inductor 的 auto-tuning 搜索空间大，但搜索不到"还没人告诉你"的最优策略。</li>
+<li><strong>研究价值</strong>：手写 Triton 是理解 GPU 并行编程的必经之路。新的设计经验证有效后，可能被社区吸收，最终成为 Inductor 能自动生成的 pattern——<strong>创新先从手写开始，再被自动编译器吸收</strong>。</li>
+</ol>
+<h4 id="flashattention">从 FlashAttention 的演进看<a class="headerlink" href="#flashattention" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>FlashAttention v1/v2：手写 CUDA kernel（极致优化）
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>    ↓
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>FlashAttention v2 Triton 版：手写 Triton kernel（研究+可移植）
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>    ↓
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>2024 年后：社区 patch 进入 PyTorch，Inductor 开始支持类似 pattern（"标准化"后自动生成）
+</code></pre></div>
+<p><strong>本质规律</strong>：先有手写实现证明可行性，再被自动编译器吸收为标准 pattern。所以手写 Triton 不会消失——它是<strong>创新的入口</strong>。</p>
+<h4 id="triton-cuda">Triton 与 CUDA 的对比<a class="headerlink" href="#triton-cuda" title="Permanent link">&para;</a></h4>
+<p>为什么手写 Triton，不直接手写 CUDA？</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>CUDA (Thread-Level)</th>
+<th>Triton (Block-Level)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>代码粒度</td>
+<td>单个 thread 的逻辑</td>
+<td><strong>单个 Block 的逻辑</strong></td>
+</tr>
+<tr>
+<td>Tiling 控制</td>
+<td>手动</td>
+<td>手动决定，编译器优化细节</td>
+</tr>
+<tr>
+<td>Shared Memory</td>
+<td>手动分配+显式同步</td>
+<td>请求使用量，编译器自动管理</td>
+</tr>
+<tr>
+<td>Thread Index</td>
+<td>手动计算 <code>blockIdx.x * blockDim.x + threadIdx.x</code></td>
+<td><strong>不用管</strong></td>
+</tr>
+<tr>
+<td>Warp 同步</td>
+<td>手动 <code>__syncthreads()</code></td>
+<td><strong>自动</strong></td>
+</tr>
+<tr>
+<td>Register 分配</td>
+<td>手动优化避免 spill</td>
+<td><strong>编译器自动</strong></td>
+</tr>
+<tr>
+<td>代码量</td>
+<td>几百行</td>
+<td>几十行（约为 CUDA 的 1/5~1/10）</td>
+</tr>
+</tbody>
+</table>
+<p><strong>核心洞察</strong>：</p>
+<blockquote>
+<p><strong>Triton = Block-Level 编程 + 自动 Thread-Level 优化</strong>
+你只需要写"一个 Block 做什么"——数据如何分块、Block 内的计算逻辑、Shared Memory 的使用量。Triton 编译器负责把 Block 逻辑分解到每个 thread，做寄存器分配、指令调度、bank conflict 优化。</p>
+</blockquote>
+<p>如果你想深入了解 Triton 的 Block-Level 编程细节，参见 2026-06-23_triton_programming_model。</p>
+<h2 id="_8">总结映射表<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>组件</th>
+<th>对应层次</th>
+<th>做 Lowering 吗？</th>
+<th>本质</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Dynamo</strong></td>
+<td>Graph Capture</td>
+<td>不做，是起点</td>
+<td>Python → FX Graph</td>
+</tr>
+<tr>
+<td><strong>AOTAutograd</strong></td>
+<td>Graph Capture 辅助</td>
+<td>不做</td>
+<td>补全反向图</td>
+</tr>
+<tr>
+<td><strong>Inductor</strong></td>
+<td>Graph + Operator + Codegen</td>
+<td><strong>做，全链路</strong></td>
+<td>FX Graph → Triton/C++</td>
+</tr>
+<tr>
+<td><strong>TorchAir</strong></td>
+<td>Graph Optimization (Ascend)</td>
+<td>做 Graph Lowering</td>
+<td>FX Graph → 昇腾图 IR</td>
+</tr>
+<tr>
+<td><strong>GE</strong></td>
+<td>Graph + Operator (Ascend)</td>
+<td><strong>做，全链路</strong></td>
+<td>图 IR → 算子调度 + tiling</td>
+</tr>
+<tr>
+<td><strong>aclnn</strong></td>
+<td>算子库</td>
+<td>不做，是产物</td>
+<td>预编译好的 kernel 二进制</td>
+</tr>
+<tr>
+<td><strong>CUDAGraph</strong></td>
+<td>Runtime</td>
+<td>不做</td>
+<td>捕获重放已编译的 kernel</td>
+</tr>
+</tbody>
+</table>
+<h2 id="_9">多角度追问<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>[!question] Inductor 做 JIT 生成 kernel，那编译耗时怎么办？
+Inductor 的首次编译确实很慢（可能几十秒到几分钟），所以实际部署中通常配合 <strong>compile cache</strong>——编译一次后缓存 Triton 生成的 .cubin 文件，后续直接加载。这是 JIT 编译的通用 trade-off：用首次编译时间换运行时最优性能。</p>
+<p>[!question] aclnn 的"预编译算子"能不能做 fusion？
+有限度地可以——aclnn 支持一些"融合算子"（如 MatMul + Bias + ReLU 打包成一个算子），但这些融合是<strong>算子库作者预先定义好的</strong>，不是运行时动态决定的。如果需要的组合不在算子库里，就只能拆成多次调用。这和 Inductor 的"任意组合"形成鲜明对比。</p>
+<p>[!question] 如果我要在 Ascend 上做 Inductor 那样的 JIT fusion，有可能吗？
+理论上可以——你可以不调 aclnn，而是用 Ascend 的底层 DSL（如 Ascend C）自己写 kernel。但这就失去了 aclnn 的"开箱即用"优势，开发成本极高。目前社区中 Ascend 路径的主流选择仍然是 GE + aclnn。</p>
+</blockquote>
+<h2 id="_10">边界与极端情况<a class="headerlink" href="#_10" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Dynamo graph break</strong>：当 Dynamo 遇到无法捕获的 Python 代码（如 data-dependent control flow），会触发 "graph break"，把图切成多段，中间回退到 eager 模式。这会导致无法做跨段的 fusion</li>
+<li><strong>Inductor 的 fallback</strong>：某些算子 Inductor 无法生成 Triton 代码，会 fallback 到调用 ATen kernel（相当于没有做 fusion 优化）</li>
+<li><strong>CUDAGraph 的限制</strong>：捕获后的图不能包含动态 shape、动态控制流，否则无法重放</li>
+</ul>
+<h2 id="_11">参考文献 &amp; 延展学习<a class="headerlink" href="#_11" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>来源</th>
+<th>类型</th>
+<th>难度</th>
+<th>链接</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>PyTorch 2.0 编译技术博客</td>
+<td>blog</td>
+<td>beginner</td>
+<td>https://pytorch.org/get-started/pytorch-2.0/</td>
+</tr>
+<tr>
+<td>TorchDynamo 深度解析</td>
+<td>blog</td>
+<td>intermediate</td>
+<td>https://dev-discuss.pytorch.org/t/torchdynamo-deep-dive/</td>
+</tr>
+<tr>
+<td>TorchInductor 架构设计</td>
+<td>设计文档</td>
+<td>advanced</td>
+<td>https://dev-discuss.pytorch.org/t/torchinductor-a-pytorch-native-compiler-with-define-by-run-ir-and-symbolic-shapes/</td>
+</tr>
+<tr>
+<td>从 Fusion、Tiling、Layout 来看 AI 时代的计算范式变革</td>
+<td>知乎</td>
+<td>intermediate</td>
+<td>https://zhuanlan.zhihu.com/p/2035814498754372533</td>
+</tr>
+<tr>
+<td>MLIR 多层次 IR 设计</td>
+<td>技术文档</td>
+<td>advanced</td>
+<td>https://mlir.llvm.org/</td>
+</tr>
+</tbody>
+</table>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  回到页面顶部
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="页脚" >
+        
+          
+          <a href="../2026-06-24_gpu_scheduling_deep_dive/" class="md-footer__link md-footer__link--prev" aria-label="上一页: GPU 调度深潜：TBS、Warp Scheduler 与延迟隐藏的完整拆解">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                上一页
+              </span>
+              <div class="md-ellipsis">
+                GPU 调度深潜：TBS、Warp Scheduler 与延迟隐藏的完整拆解
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../2026-06-23_fusion_tiling_layout/" class="md-footer__link md-footer__link--next" aria-label="下一页: Fusion / Tiling / Layout 三元组">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                下一页
+              </span>
+              <div class="md-ellipsis">
+                Fusion / Tiling / Layout 三元组
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2026 DragonFive
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.footer", "search.highlight", "search.share", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>

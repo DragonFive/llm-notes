@@ -1,0 +1,2457 @@
+
+<!doctype html>
+<html lang="zh" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="机器学习系统学习笔记 —— GPU 调度、Tensor Core、编译器与推理框架">
+      
+      
+      
+        <link rel="canonical" href="https://dragonfive.github.io/llm-notes/notes/2026-07-12_inductor_fx_passes/">
+      
+      
+        <link rel="prev" href="../2026-06-22_megakernel_vs_unfused/">
+      
+      
+        <link rel="next" href="../2026-07-09_inductor_ir_design/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>Inductor FX Passes — Lowering 之前的图级优化全景 - LLM Notes</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#inductor-fx-passes-lowering" class="md-skip">
+          跳转至
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="页眉">
+    <a href="../.." title="LLM Notes" class="md-header__button md-logo" aria-label="LLM Notes" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            LLM Notes
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Inductor FX Passes — Lowering 之前的图级优化全景
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="切换到深色模式"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="切换到深色模式" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="切换到浅色模式"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="切换到浅色模式" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="搜索" placeholder="搜索" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="查找">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="分享" aria-label="分享" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="清空当前内容" aria-label="清空当前内容" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            正在初始化搜索引擎
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/DragonFive/llm-notes" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DragonFive/llm-notes
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="导航栏" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="LLM Notes" class="md-nav__button md-logo" aria-label="LLM Notes" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    LLM Notes
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/DragonFive/llm-notes" title="前往仓库" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    DragonFive/llm-notes
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    首页
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    推理系统与分布式并行
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    推理系统与分布式并行
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-10-13_xllm_linear_tail_prefix_cache_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    深入解析 linear tail prefix cache
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-10-10_xllm_sfadcp_dcp_decode_attention_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    SfaDcp:decode KV 分条注意力深潜
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU Kernel 与指令级
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    GPU Kernel 与指令级
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-07_gemm_ar_multimem_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GEMM+AR 融合与 multimem 通信深潜
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-06_mma-instruction-deep-dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MMA 指令深潜：线程分配、Fragment Layout 与数据流
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-04_tensor_core_ptx_pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tensor Core PTX 指令管线全拆解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-02_wgmma_hopper_gemm/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    WGMMA Hopper GEMM 完整讲解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-29_async_instruction_scheduling/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    指令调度代际跃迁：从同步锁资源到异步发令枪
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-25_warp_scheduler_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Warp Scheduler 硬件架构全解析
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-24_gpu_scheduling_deep_dive/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    GPU 调度深潜：TBS、Warp Scheduler 与延迟隐藏的完整拆解
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-23_pytorch_compiler_stack/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PyTorch 编译栈与 Lowering 层次映射
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-23_fusion_tiling_layout/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Fusion / Tiling / Layout 三元组
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-22_pdl_vs_cudagraph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    PDL vs CUDA Graph vs Piecewise CUDA Graph — LLM 推理 kernel launch overhead 优化全景
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-06-22_megakernel_vs_unfused/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Megakernel vs Unfused — 为什么 GPU 推理优化不能迷信"大融合"
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--stable"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    编译器与图优化
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    编译器与图优化
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inductor FX Passes — Lowering 之前的图级优化全景
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inductor FX Passes — Lowering 之前的图级优化全景
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景引入
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        前置概念
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="前置概念">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#vs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        模式匹配 vs 算子分解：两条互补路径
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        经典编译器优化对应
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vs_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        常量传播 vs 常量折叠
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#noop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        noop 消除
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dce" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        节点重定向 + DCE
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        核心讲解
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="核心讲解">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pass" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第一部分：三阶段 Pass 体系
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="第一部分：三阶段 Pass 体系">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pass_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        各 Pass 详细拆解
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#patternmatcherpass" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第二部分：模式匹配引擎架构（PatternMatcherPass）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="第二部分：模式匹配引擎架构（PatternMatcherPass）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        执行流程
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fan-out-vs-fan-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        为什么从后往前（逆向）匹配？— fan-out vs fan-in
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        两种注册方式
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        模式 DAG 构建
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        两次匹配机制
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#serialized_patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        预编译模式（serialized_patterns/）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第三部分：关键融合案例深入
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="第三部分：关键融合案例深入">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attention 融合（最重要）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#conv-bn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conv-BN 融合
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#group-batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group Batch 融合
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-grad" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第四部分：为什么 Post-grad 有三轮模式匹配？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#silu-b" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第五部分：SiLU 分解选择——为什么选方式 B
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        多角度追问
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        与其他概念的关系
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        关键洞察
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        参考文献
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../2026-07-09_inductor_ir_design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inductor IR 设计精髓 — Define-by-Run、闭包组合、V.ops 虚拟化
+  
+
+    
+  </span>
+  
+  
+    
+  
+  
+    <span class="md-status md-status--draft"></span>
+  
+
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="目录">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      目录
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        场景引入
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_2" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        前置概念
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="前置概念">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#vs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        模式匹配 vs 算子分解：两条互补路径
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_3" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        经典编译器优化对应
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#vs_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        常量传播 vs 常量折叠
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#noop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        noop 消除
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dce" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        节点重定向 + DCE
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_4" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        核心讲解
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="核心讲解">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pass" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第一部分：三阶段 Pass 体系
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="第一部分：三阶段 Pass 体系">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#pass_1" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        各 Pass 详细拆解
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#patternmatcherpass" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第二部分：模式匹配引擎架构（PatternMatcherPass）
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="第二部分：模式匹配引擎架构（PatternMatcherPass）">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#_5" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        执行流程
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#fan-out-vs-fan-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        为什么从后往前（逆向）匹配？— fan-out vs fan-in
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_6" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        两种注册方式
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#dag" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        模式 DAG 构建
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_7" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        两次匹配机制
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#serialized_patterns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        预编译模式（serialized_patterns/）
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#_8" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第三部分：关键融合案例深入
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="第三部分：关键融合案例深入">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#attention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Attention 融合（最重要）
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#conv-bn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Conv-BN 融合
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#group-batch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Group Batch 融合
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#post-grad" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第四部分：为什么 Post-grad 有三轮模式匹配？
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#silu-b" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        第五部分：SiLU 分解选择——为什么选方式 B
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_9" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        多角度追问
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_10" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        与其他概念的关系
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_11" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        关键洞察
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#_12" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        参考文献
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="inductor-fx-passes-lowering">Inductor FX Passes — Lowering 之前的图级优化全景<a class="headerlink" href="#inductor-fx-passes-lowering" title="Permanent link">&para;</a></h1>
+<h2 id="_1">场景引入<a class="headerlink" href="#_1" title="Permanent link">&para;</a></h2>
+<p>FX Graph 从 Dynamo 出来时，是对 Python 代码的"忠实记录"——每一个 view、permute、冗余计算都原封不动地留在图里。Lowering 之后，这些高层语义信息会被碾碎成循环级 IR（per-index 的 lambda 表达式），再也看不出"这 4 个节点合起来是一个 Attention"。</p>
+<p>所以 FX Passes 是 <strong>Lowering 之前的最后一道关卡</strong>——图里有大量冗余和低效模式，不在这一步清理掉就永远清理不了。</p>
+<hr />
+<h2 id="_2">前置概念<a class="headerlink" href="#_2" title="Permanent link">&para;</a></h2>
+<h3 id="vs">模式匹配 vs 算子分解：两条互补路径<a class="headerlink" href="#vs" title="Permanent link">&para;</a></h3>
+<ul>
+<li><strong>分解（Decomposition）</strong>：大算子 → 碎片（增加节点数，为后续 Fusion 创造素材）</li>
+<li>例：<code>silu(x)</code> → <code>x / (1 + exp(-x))</code> — 3 个节点变 5 个节点</li>
+<li><strong>模式匹配（Pattern Matching）</strong>：碎片 → 高效整体（减少节点数，替换为专用 kernel）</li>
+<li>例：<code>matmul + scale + softmax + matmul</code> → <code>flash_attention</code> — 4 个节点变 1 个节点</li>
+<li><strong>协同</strong>：分解展开后，模式匹配可能识别出"展开后恰好是某个高效模式"</li>
+<li>先破（暴露子结构）→ 再立（选最优实现）</li>
+</ul>
+<h3 id="_3">经典编译器优化对应<a class="headerlink" href="#_3" title="Permanent link">&para;</a></h3>
+<table>
+<thead>
+<tr>
+<th>经典技术</th>
+<th>Inductor FX Pass 对应</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>CSE（公共子表达式消除）</td>
+<td>节点重定向 + DCE</td>
+</tr>
+<tr>
+<td>DCE（死代码消除）</td>
+<td>eliminate_dead_code()</td>
+</tr>
+<tr>
+<td>常量折叠</td>
+<td>分解表中常量直接算</td>
+</tr>
+<tr>
+<td>常量传播</td>
+<td>沿数据流追踪常量 → 折叠更多表达式</td>
+</tr>
+<tr>
+<td>代数化简</td>
+<td>pointless_view / pointless_permute（noop 消除）</td>
+</tr>
+<tr>
+<td>循环融合</td>
+<td>Attention 融合 / Conv-BN 融合 / Group Batch 融合</td>
+</tr>
+<tr>
+<td>指令选择</td>
+<td>PatternMatcherPass + Decomposition Table</td>
+</tr>
+</tbody>
+</table>
+<h3 id="vs_1">常量传播 vs 常量折叠<a class="headerlink" href="#vs_1" title="Permanent link">&para;</a></h3>
+<p>两者经常混淆，但有本质区别：</p>
+<ul>
+<li><strong>常量折叠</strong> = "两个常量做运算 → 直接算出结果"（局部，一步）</li>
+<li><strong>常量传播</strong> = "追踪变量值从哪来 → 发现是常量 → 然后折叠"（全局，多步）</li>
+<li><strong>传播是折叠的前提</strong></li>
+</ul>
+<p>具体例子：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="n">a</span> <span class="o">=</span> <span class="mi">5</span>          <span class="c1"># 常量</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="n">b</span> <span class="o">=</span> <span class="n">a</span> <span class="o">+</span> <span class="mi">3</span>      <span class="c1"># 传播发现 a=5 → 折叠为 b=8</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="n">c</span> <span class="o">=</span> <span class="n">b</span> <span class="o">*</span> <span class="mi">2</span>      <span class="c1"># 传播发现 b=8 → 折叠为 c=16</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="n">d</span> <span class="o">=</span> <span class="n">c</span> <span class="o">+</span> <span class="n">x</span>      <span class="c1"># 传播发现 c=16 → 折叠为 d=16+x</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>               <span class="c1"># x 不是常量，到这里停止</span>
+</code></pre></div>
+<p>没有传播，编译器只能折叠 <code>5+3</code>（两个字面量）。有了传播，才能沿数据流一路追踪到 <code>c=16</code>，把多步运算全部折叠掉。</p>
+<h3 id="noop">noop 消除<a class="headerlink" href="#noop" title="Permanent link">&para;</a></h3>
+<p><strong>noop</strong> = 执行了但什么都没改变的操作。</p>
+<p>常见例子：
+- <code>x.view(x.shape)</code> — view 操作但形状没变
+- <code>x.permute(0, 1, 2, 3)</code> — permute 操作但维度顺序没变
+- <code>x.contiguous()</code> — 本来就连续，调了也白调</p>
+<p>对应的 FX Pass：
+- <strong>pointless_view</strong> = view 操作但形状没变 → 直接删除
+- <strong>pointless_permute</strong> = permute 操作但维度顺序没变 → 直接删除</p>
+<blockquote>
+<p>为什么会出现 noop？Dynamo 忠实记录用户代码中的所有操作，包括实际上是 noop 的那些。用户代码里写了 <code>x.contiguous()</code>，Dynamo 就录进图里——它不管这个操作有没有实际效果。</p>
+</blockquote>
+<h3 id="dce">节点重定向 + DCE<a class="headerlink" href="#dce" title="Permanent link">&para;</a></h3>
+<p>这是 FX Pass 中"替换 + 清理"的标准两步：</p>
+<p><strong>Step 1 — 节点重定向</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>原始图：
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>  node_1: matmul(Q, K^T)
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>  node_2: scale(node_1, 1/√d)
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>  node_3: softmax(node_2)
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>  node_4: matmul(node_3, V)
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>  node_5: use(node_4)        ← 下游用 node_4 的结果
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>模式匹配找到 4 个 SDPA 节点 → 创建新节点：
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>  node_new: flash_attention(Q, K, V)
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>重定向：所有"用 node_4 结果的" → 改为用 node_new
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>  node_5: use(node_new)      ← 现在指向新节点
+</code></pre></div>
+<p><strong>Step 2 — DCE（Dead Code Elimination）</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>node_1 用户数=0（没人用了）→ 删除
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>node_2 用户数=0 → 删除
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>node_3 用户数=0 → 删除
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>node_4 用户数=0 → 删除
+</code></pre></div>
+<p>两步配合 = <strong>"替换 + 清理"</strong>。模式匹配只负责创建新节点并重定向引用，DCE 负责清理失去所有用户的旧节点。</p>
+<hr />
+<h2 id="_4">核心讲解<a class="headerlink" href="#_4" title="Permanent link">&para;</a></h2>
+<h3 id="pass">第一部分：三阶段 Pass 体系<a class="headerlink" href="#pass" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>Pre-grad Pass（前处理）—— AOTAutograd 之前，完整计算图
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  ├── fuse_fx：sink_cat_after_pointwise + permute_fusion
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>  ├── normalization_pass：layernorm → native_layer_norm 标准化
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>  ├── group_batch_fusion：多个小算子合并为批量执行
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>  └── efficient_conv_bn_eval_pass：conv + BN → 单个 conv
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a>Joint Graph Pass（联合图优化）—— 前向+反向联合图上
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>  ├── canonicalize_aten_ir：标准化 ATen 表示
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>  ├── remove_noop_ops：删除空操作
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a>  ├── early_patterns：pointless_view / pointless_permute
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a>  ├── SDPA 模式匹配：28+ 个 attention 变体 → flash_attention
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a>  └── pad_mm + misc_patterns
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a>
+<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a>Post-grad Pass（后处理）—— 前向/反向分离后，精确形状已知
+<a id="__codelineno-3-15" name="__codelineno-3-15" href="#__codelineno-3-15"></a>  ├── eliminate_dead_code()
+<a id="__codelineno-3-16" name="__codelineno-3-16" href="#__codelineno-3-16"></a>  ├── group_batch_fusion（第二次）
+<a id="__codelineno-3-17" name="__codelineno-3-17" href="#__codelineno-3-17"></a>  ├── pass_patterns[0..2]：三轮模式匹配
+<a id="__codelineno-3-18" name="__codelineno-3-18" href="#__codelineno-3-18"></a>  └── reinplace_inplaceable_ops：out-of-place → in-place
+</code></pre></div>
+<p><strong>为什么分三阶段？</strong></p>
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>时机</th>
+<th>能看到什么</th>
+<th>做什么</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Pre-grad</td>
+<td>AOTAutograd 之前</td>
+<td>完整计算图（未分离前向/反向）</td>
+<td>需要全图信息的融合（Conv-BN、Group Batch）</td>
+</tr>
+<tr>
+<td>Joint</td>
+<td>联合图上</td>
+<td>前向+反向在同一张图</td>
+<td>标准化表示、消除 noop、大模式匹配（SDPA）</td>
+</tr>
+<tr>
+<td>Post-grad</td>
+<td>前向/反向分离后</td>
+<td>精确的张量形状（FakeTensor 已跑完）</td>
+<td>需要精确形状的模式匹配、in-place 优化</td>
+</tr>
+</tbody>
+</table>
+<p>关键因果链：Pre-grad 需要完整图（Conv-BN 需要看到 BN 的 running_mean/var）→ Joint 需要标准化表示（SDPA 模式匹配需要统一方言）→ Post-grad 需要精确形状（模式匹配二次验证需要 FakeTensor 形状）。</p>
+<h4 id="pass_1">各 Pass 详细拆解<a class="headerlink" href="#pass_1" title="Permanent link">&para;</a></h4>
+<p><strong>Pre-grad 阶段</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>Pass</th>
+<th>做什么</th>
+<th>类比</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>sink_cat_after_pointwise</strong></td>
+<td>把 cat 操作往计算链下游推，让 cat 之前的 pointwise 有机会互相融合</td>
+<td>先把零件各自打磨好，最后再拼接</td>
+</tr>
+<tr>
+<td><strong>permute_fusion</strong></td>
+<td>合并连续的 permute 为一次（两次维度重排可数学组合为一次）</td>
+<td>两次转弯合并为一次</td>
+</tr>
+<tr>
+<td><strong>normalization_pass</strong></td>
+<td>统一 LayerNorm 的多种表示为 <code>native_layer_norm</code></td>
+<td>6 种方言统一为普通话</td>
+</tr>
+<tr>
+<td><strong>group_batch_fusion</strong></td>
+<td>多个独立小 GEMM 合并为 batched_linear</td>
+<td>3 封单独快递合并为 1 个包裹</td>
+</tr>
+<tr>
+<td><strong>efficient_conv_bn_eval_pass</strong></td>
+<td>推理时把 BN 参数数学折进 Conv 权重</td>
+<td>两步工序预合并为一步</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># sink_cat_after_pointwise 演示：</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="c1"># 优化前：relu(x), relu(y) → cat → sigmoid（cat 挡在中间）</span>
+<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="c1"># 优化后：relu(x)→sigmoid, relu(y)→sigmoid → cat（cat 推到最后）</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># 收益：relu+sigmoid 可以被 Fusion 合并为一个 kernel</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="c1"># permute_fusion 演示：</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1"># x.permute(0,2,1).permute(1,0,2) → x.permute(2,0,1)（一步到位）</span>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="c1"># normalization_pass 演示：</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="c1"># aten.layer_norm → aten.native_layer_norm（输出变为 tuple: (output, mean, rstd)）</span>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="c1"># 为什么？native_layer_norm 是底层确定形式，后续模式匹配只需认一种</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="c1"># group_batch_fusion 演示：</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="c1"># q_proj(x), k_proj(x), v_proj(x) → batched_mm(x, [W_q, W_k, W_v])</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="c1"># 能 batch 的条件：共享输入 + 独立权重 + 无依赖 + 形状兼容</span>
+</code></pre></div>
+<p><strong>Joint 阶段</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>Pass</th>
+<th>做什么</th>
+<th>为什么在这个位置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>canonicalize_aten_ir</strong></td>
+<td>统一 ATen 算子多种写法（matmul→mm/bmm、add.Tensor→add.default）</td>
+<td>模式匹配前必须统一"方言"，否则同一模式要写多套规则</td>
+</tr>
+<tr>
+<td><strong>remove_noop_ops</strong></td>
+<td>删除 noop（view 同形 / contiguous 本来就连续 / to 同类型）</td>
+<td>减少图噪声</td>
+</tr>
+<tr>
+<td><strong>early_patterns</strong></td>
+<td>删除 pointless_view / pointless_permute</td>
+<td>在 SDPA 匹配前清理——否则 view 节点会打断模式匹配</td>
+</tr>
+<tr>
+<td><strong>SDPA 模式匹配</strong></td>
+<td>识别 28+ 种 Attention 变体 → flash_attention</td>
+<td>最重要的优化，必须在干净图上做</td>
+</tr>
+<tr>
+<td><strong>pad_mm</strong></td>
+<td>不对齐矩阵 pad 到 8/16/32 倍数（Tensor Core 要求）</td>
+<td>GEMM 效率优化</td>
+</tr>
+<tr>
+<td><strong>misc_patterns</strong></td>
+<td>杂项（mm+add→addmm、cat+split 互消等）</td>
+<td>收尾清理</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># canonicalize_aten_ir 为什么需要：</span>
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1"># 用户写 x @ y → Dynamo 追踪为 aten.matmul</span>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="c1"># 但模式匹配注册的是 aten.mm</span>
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># 不标准化 → 匹配失败 → 优化漏掉</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># 标准化：aten.matmul(2D,2D) → aten.mm</span>
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1"># early_patterns 为什么叫"early"：</span>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="c1"># 在 SDPA 匹配之前先做。</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="c1"># 如果图里有 pointless_view：matmul → [view] → softmax</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="c1"># SDPA 模式要求 matmul → softmax 直连 → 匹配失败</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="c1"># early_patterns 先删 view → matmul → softmax → SDPA 匹配成功！</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a><span class="c1"># pad_mm 演示：</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="c1"># [32, 100] × [100, 200] → pad 到 [32, 128] × [128, 200]</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="c1"># Tensor Core 需要 8/16 对齐 → pad 后效率提升 &gt; pad 开销</span>
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="c1"># 启发式判断：矩阵够大才 pad（太小不值得）</span>
+</code></pre></div>
+<p><strong>Post-grad 阶段</strong>：</p>
+<table>
+<thead>
+<tr>
+<th>Pass</th>
+<th>做什么</th>
+<th>为什么在最后</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>eliminate_dead_code</strong></td>
+<td>删除用户数=0 的节点</td>
+<td>前面的替换可能遗留死节点</td>
+</tr>
+<tr>
+<td><strong>group_batch_fusion（第二次）</strong></td>
+<td>再次扫描 batch 机会</td>
+<td>AOTAutograd 分离后暴露了新的独立操作（如反向图中多个独立 weight grad）</td>
+</tr>
+<tr>
+<td><strong>pass_patterns[0..2]</strong></td>
+<td>三组不同模式各跑一遍</td>
+<td>依赖顺序（先清理→再优化→最后收尾）</td>
+</tr>
+<tr>
+<td><strong>reinplace_inplaceable_ops</strong></td>
+<td>out-of-place → in-place（省内存）</td>
+<td>必须最后做——需要确认"没人再用旧值"</td>
+</tr>
+</tbody>
+</table>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># 为什么 group_batch_fusion 要跑两次：</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="c1"># Pre-grad：在完整图上找 batch 机会（如 QKV 三个 Linear）</span>
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="c1"># Post-grad：AOTAutograd 分离后反向图里可能新出现独立的 weight gradient 计算</span>
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="c1">#           → 这些是 pre-grad 时不存在的 → 需要再扫一遍</span>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="c1"># reinplace_inplaceable_ops 演示：</span>
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="c1"># 原始：buf0 = add(x, bias)    → buf1 = relu(buf0)</span>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="c1">#       buf0 之后没人再用了 → 可以安全地 in-place</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="c1"># 转换：buf0 = add(x, bias)    → relu_(buf0)  ← 直接改 buf0，不分配 buf1</span>
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="c1"># 哪些操作可以 in-place：</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="c1">#   add_, mul_, relu_, sigmoid_, zero_, fill_, copy_, scatter_</span>
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="c1"># 条件：被修改的 tensor 之后不再被其他节点使用（use-def 链分析）</span>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="c1"># 为什么不一开始就用 in-place：</span>
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="c1"># 1. 正确性：用户写 y=x+1 语义是"x 不变"，不能偷改 x</span>
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="c1"># 2. AOTAutograd 需要前向中间值做反向 → 不能 in-place 改掉</span>
+<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="c1"># 3. 必须看完整 use-def 链才能判断安全性 → 所有其他 Pass 做完后再分析</span>
+</code></pre></div>
+<h3 id="patternmatcherpass">第二部分：模式匹配引擎架构（PatternMatcherPass）<a class="headerlink" href="#patternmatcherpass" title="Permanent link">&para;</a></h3>
+<h4 id="_5">执行流程<a class="headerlink" href="#_5" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>1. 收集候选锚点（find_anchor_nodes）
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>   "锚点" = 模式中最后一个节点的 (op, target) 类型
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>   例：SDPA 模式的锚点 = 最后那个 aten.matmul
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>2. 按逆拓扑序排列（reverse=True）
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a>   先处理靠近输出端的节点
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a>3. 逐个尝试匹配
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>   _TargetArgsExpr._match()：
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>     ├── 检查 target（算子类型是否匹配）
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>     └── 递归检查 args（从锚点沿 args 链向上追溯）
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a>4. extra_check 通过后应用替换
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a>   extra_check：用户自定义的额外验证（如形状约束、dtype 约束）
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>   通过 → 创建新节点 + 重定向 + DCE
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a>5. 返回替换计数
+</code></pre></div>
+<h4 id="fan-out-vs-fan-in">为什么从后往前（逆向）匹配？— fan-out vs fan-in<a class="headerlink" href="#fan-out-vs-fan-in" title="Permanent link">&para;</a></h4>
+<p>这是模式匹配算法最核心的设计决策：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>FX Graph 的数据流结构：
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>  正向（数据流方向）：一个节点可能有 N 个消费者（fan-out，不确定）
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a>  逆向（args 方向）：一个节点的输入来源是确定的（args 是固定列表）
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a>         input_x
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>        /       \
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>   matmul_1   matmul_2      ← fan-out：input_x 有 2 个消费者
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a>     |           |
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>   scale       linear       ← 从 input_x 正向找，每个分叉都要探索
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a>     |           |
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>   softmax     relu
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a>     |           |
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a>   matmul_3    add
+</code></pre></div>
+<p><strong>正向找（从 input 到 output）</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a>从 input_x 出发 → 有 2 个消费者 → 走哪条？
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>  走 matmul_1 → 继续看它的消费者 → 可能还有分叉
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a>  走 matmul_2 → 走错了，不是 SDPA
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a>fan-out = 分叉 = 每个分叉都要探索 = 指数级搜索空间
+</code></pre></div>
+<p><strong>逆向找（从 output 到 input）</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a>从锚点 matmul_3 出发 → 检查 matmul_3.args：
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a>  args[0] = softmax_node ← 确定的！（每个节点的 args 是固定列表）
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a>  → 检查 softmax_node.args：
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a>    args[0] = scale_node ← 确定的！
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>    → 检查 scale_node.args：
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a>      args[0] = matmul_1 ← 确定的！
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a>      → 匹配成功！
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a>fan-in = 每步只有一条确定路径 = O(模式深度) 线性验证
+</code></pre></div>
+<blockquote>
+<p>[!insight] 为什么逆向更快？
+<code>node.args</code>（输入来源）是确定的固定列表——Python 函数的参数就那几个。
+<code>node.users</code>（谁用了这个节点）可能有任意多个——一个 tensor 可能被 10 个操作使用。
+<strong>逆向沿 args 追溯 = 每步路径唯一，不存在"走错路"。正向沿 users 探索 = 每步可能分叉。</strong></p>
+</blockquote>
+<p><strong>逆拓扑序遍历的额外好处</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-11-1" name="__codelineno-11-1" href="#__codelineno-11-1"></a>好处 1：避免替换冲突
+<a id="__codelineno-11-2" name="__codelineno-11-2" href="#__codelineno-11-2"></a>  如果图有 A → B → C → D → E：
+<a id="__codelineno-11-3" name="__codelineno-11-3" href="#__codelineno-11-3"></a>    模式 1 要匹配 [C, D, E]
+<a id="__codelineno-11-4" name="__codelineno-11-4" href="#__codelineno-11-4"></a>    模式 2 要匹配 [A, B, C]
+<a id="__codelineno-11-5" name="__codelineno-11-5" href="#__codelineno-11-5"></a>
+<a id="__codelineno-11-6" name="__codelineno-11-6" href="#__codelineno-11-6"></a>  逆序（从 E 开始）：先匹配模式 1 → C 被替换
+<a id="__codelineno-11-7" name="__codelineno-11-7" href="#__codelineno-11-7"></a>  → 模式 2 再看 C → 已经不存在了 → 正确跳过
+<a id="__codelineno-11-8" name="__codelineno-11-8" href="#__codelineno-11-8"></a>
+<a id="__codelineno-11-9" name="__codelineno-11-9" href="#__codelineno-11-9"></a>  正序（从 A 开始）：先匹配模式 2 → C 被替换
+<a id="__codelineno-11-10" name="__codelineno-11-10" href="#__codelineno-11-10"></a>  → 模式 1 再看 C → 已经不存在了 → 漏掉了更好的优化！
+<a id="__codelineno-11-11" name="__codelineno-11-11" href="#__codelineno-11-11"></a>
+<a id="__codelineno-11-12" name="__codelineno-11-12" href="#__codelineno-11-12"></a>好处 2：与递归方向一致
+<a id="__codelineno-11-13" name="__codelineno-11-13" href="#__codelineno-11-13"></a>  .match() 从锚点往 args 递归（逆向追溯）
+<a id="__codelineno-11-14" name="__codelineno-11-14" href="#__codelineno-11-14"></a>  遍历也是逆向 → 自然对齐
+<a id="__codelineno-11-15" name="__codelineno-11-15" href="#__codelineno-11-15"></a>
+<a id="__codelineno-11-16" name="__codelineno-11-16" href="#__codelineno-11-16"></a>好处 3：跟前向/反向传播无关
+<a id="__codelineno-11-17" name="__codelineno-11-17" href="#__codelineno-11-17"></a>  这里的"逆"指的是 DAG 拓扑顺序的反向，不是"反向传播"
+<a id="__codelineno-11-18" name="__codelineno-11-18" href="#__codelineno-11-18"></a>  前向图和反向图都用同一个逆拓扑序算法做模式匹配
+</code></pre></div>
+<h4 id="_6">两种注册方式<a class="headerlink" href="#_6" title="Permanent link">&para;</a></h4>
+<p><strong>register_replacement（声明式）</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">search_fn</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>    <span class="c1"># 描述要匹配的模式</span>
+<a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a>    <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="o">-</span><span class="mi">1</span><span class="p">,</span> <span class="o">-</span><span class="mi">2</span><span class="p">))</span> <span class="o">*</span> <span class="n">scale</span>
+<a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="k">def</span><span class="w"> </span><span class="nf">replace_fn</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">):</span>
+<a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a>    <span class="c1"># 描述替换后的实现</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a>    <span class="k">return</span> <span class="n">flash_attention</span><span class="p">(</span><span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">)</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="n">register_replacement</span><span class="p">(</span><span class="n">search_fn</span><span class="p">,</span> <span class="n">replace_fn</span><span class="p">,</span> <span class="n">extra_check</span><span class="o">=</span><span class="n">check_shapes</span><span class="p">)</span>
+</code></pre></div>
+<p>引擎自动 trace search_fn → 构建模式 DAG → 匹配 → 替换。适合<strong>简单的一对一替换</strong>。</p>
+<p><strong>register_graph_pattern（命令式）</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="nd">@register_graph_pattern</span><span class="p">(</span><span class="n">pattern</span><span class="p">,</span> <span class="n">extra_check</span><span class="o">=...</span><span class="p">)</span>
+<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="k">def</span><span class="w"> </span><span class="nf">handler</span><span class="p">(</span><span class="n">match</span><span class="p">,</span> <span class="n">x</span><span class="p">,</span> <span class="n">y</span><span class="p">,</span> <span class="n">z</span><span class="p">):</span>
+<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a>    <span class="c1"># 完全自定义的图变换逻辑</span>
+<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a>    <span class="c1"># 可以看上下文、做条件判断、创建多个新节点</span>
+<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a>    <span class="o">...</span>
+</code></pre></div>
+<p>提供 handler 函数，完全自定义图变换。适合<strong>需要看上下文的复杂变换</strong>（如根据输入形状选择不同替换策略）。</p>
+<h4 id="dag">模式 DAG 构建<a class="headerlink" href="#dag" title="Permanent link">&para;</a></h4>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-14-1" name="__codelineno-14-1" href="#__codelineno-14-1"></a>Python 函数 → FX trace → FX Graph → 转为 PatternExpr DAG
+<a id="__codelineno-14-2" name="__codelineno-14-2" href="#__codelineno-14-2"></a>
+<a id="__codelineno-14-3" name="__codelineno-14-3" href="#__codelineno-14-3"></a>PatternExpr 节点类型：
+<a id="__codelineno-14-4" name="__codelineno-14-4" href="#__codelineno-14-4"></a>  ├── CallFunction  — 算子调用（如 torch.matmul）
+<a id="__codelineno-14-5" name="__codelineno-14-5" href="#__codelineno-14-5"></a>  ├── KeywordArg    — 需要捕获的参数（如 x, y）
+<a id="__codelineno-14-6" name="__codelineno-14-6" href="#__codelineno-14-6"></a>  └── Ignored       — 不参与匹配的部分
+</code></pre></div>
+<p>以 SDPA 模式为例：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-15-1" name="__codelineno-15-1" href="#__codelineno-15-1"></a><span class="k">def</span><span class="w"> </span><span class="nf">sdpa_pattern</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">key</span><span class="p">,</span> <span class="n">value</span><span class="p">,</span> <span class="n">inv_scale</span><span class="p">):</span>
+<a id="__codelineno-15-2" name="__codelineno-15-2" href="#__codelineno-15-2"></a>    <span class="c1"># FX trace 这个函数 → 得到 4 个 CallFunction 节点</span>
+<a id="__codelineno-15-3" name="__codelineno-15-3" href="#__codelineno-15-3"></a>    <span class="n">attn_weight</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">query</span><span class="p">,</span> <span class="n">key</span><span class="o">.</span><span class="n">transpose</span><span class="p">(</span><span class="o">-</span><span class="mi">2</span><span class="p">,</span> <span class="o">-</span><span class="mi">1</span><span class="p">))</span> <span class="o">*</span> <span class="n">inv_scale</span>
+<a id="__codelineno-15-4" name="__codelineno-15-4" href="#__codelineno-15-4"></a>    <span class="n">attn_weight</span> <span class="o">=</span> <span class="n">torch</span><span class="o">.</span><span class="n">softmax</span><span class="p">(</span><span class="n">attn_weight</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span>
+<a id="__codelineno-15-5" name="__codelineno-15-5" href="#__codelineno-15-5"></a>    <span class="k">return</span> <span class="n">torch</span><span class="o">.</span><span class="n">matmul</span><span class="p">(</span><span class="n">attn_weight</span><span class="p">,</span> <span class="n">value</span><span class="p">)</span>
+</code></pre></div>
+<p>trace 后变为：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>PatternExpr DAG:
+<a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a>  transpose_node = CallFunction(aten.transpose, KeywordArg("key"), -2, -1)
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a>  matmul_1 = CallFunction(aten.matmul, KeywordArg("query"), transpose_node)
+<a id="__codelineno-16-4" name="__codelineno-16-4" href="#__codelineno-16-4"></a>  scale_node = CallFunction(aten.mul, matmul_1, KeywordArg("inv_scale"))
+<a id="__codelineno-16-5" name="__codelineno-16-5" href="#__codelineno-16-5"></a>  softmax_node = CallFunction(aten.softmax, scale_node, dim=-1)
+<a id="__codelineno-16-6" name="__codelineno-16-6" href="#__codelineno-16-6"></a>  matmul_2 = CallFunction(aten.matmul, softmax_node, KeywordArg("value"))
+</code></pre></div>
+<h4 id="_7">两次匹配机制<a class="headerlink" href="#_7" title="Permanent link">&para;</a></h4>
+<ul>
+<li><strong>第一次（通用模式匹配）</strong>：只匹配算子类型和结构</li>
+<li>快速过滤：DAG 结构匹配（target 类型 + args 数量 + 拓扑关系）</li>
+<li>不做形状检查（形状检查贵）</li>
+<li>
+<p>过滤掉 99% 的非匹配节点</p>
+</li>
+<li>
+<p><strong>第二次（具体模式验证）</strong>：用 FakeTensor 重新 trace → 形状精确验证</p>
+</li>
+<li>用第一次匹配捕获的实际参数，跑一遍 search_fn 和 replace_fn</li>
+<li>验证输入形状是否真的满足替换条件</li>
+<li>验证替换后输出形状是否与原来一致</li>
+</ul>
+<p><strong>为什么分两次？</strong> 形状检查需要跑 FakeTensor（本质是做一遍 meta 计算），开销不小。先用结构匹配（纯图遍历，O(n) 级别）过滤掉绝大多数不可能匹配的节点，再对少数候选做精确验证。</p>
+<h4 id="serialized_patterns">预编译模式（serialized_patterns/）<a class="headerlink" href="#serialized_patterns" title="Permanent link">&para;</a></h4>
+<p><strong>问题</strong>：28 个 SDPA 模式 + 数十个其他模式，每个都要 FX trace 构建 DAG。启动时全部 trace 一遍太慢。</p>
+<p><strong>方案</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>开发时：
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a>  PYTORCH_GEN_PATTERNS=1 python ... → trace 所有模式 → 序列化为 Python 文件
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a>  → 存入 serialized_patterns/ 目录
+<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a>
+<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a>生产环境：
+<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a>  启动时直接 import serialized_patterns → 跳过 trace
+<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a>  → 启动快几秒
+</code></pre></div>
+<p><strong>类比</strong>：提前画好地图存文件 vs 每次启动现场画地图。地图（模式 DAG）不变，没必要每次重画。</p>
+<h3 id="_8">第三部分：关键融合案例深入<a class="headerlink" href="#_8" title="Permanent link">&para;</a></h3>
+<h4 id="attention">Attention 融合（最重要）<a class="headerlink" href="#attention" title="Permanent link">&para;</a></h4>
+<p><strong>未融合</strong>：4 个独立 kernel，3 次 HBM 读写</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>Kernel 1: matmul(Q, K^T) → 中间结果写 HBM（O(N²) 大小）
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a>Kernel 2: scale(result)  → 读 HBM + 写 HBM
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a>Kernel 3: softmax(result)→ 读 HBM + 写 HBM
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a>Kernel 4: matmul(result, V) → 读 HBM + 写 HBM
+</code></pre></div>
+<p><strong>融合后</strong>：1 个 flash_attention，0 次中间 HBM 读写</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>flash_attention(Q, K, V) → 直接输出最终结果
+<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>  - 中间 N² 矩阵永远不写 HBM（tiling 分块计算）
+<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>  - 带宽从 O(N²) 降到 O(N)
+</code></pre></div>
+<p><strong>28+ 种 SDPA 变体</strong>：带 mask / dropout / causal / bias / 不同 scale / GQA / MQA / sliding window ...</p>
+<p>每种变体都是一个独立的模式注册，匹配后替换为对应的高效实现。</p>
+<blockquote>
+<p><strong>为什么必须在 FX Pass 做？</strong> Lowering 后 4 个 ATen 节点被碾碎为几十个循环级 ops（per-index lambda），再也看不出"这是 Attention"。语义信息只在 FX Graph 层面存在。</p>
+</blockquote>
+<h4 id="conv-bn">Conv-BN 融合<a class="headerlink" href="#conv-bn" title="Permanent link">&para;</a></h4>
+<p>这不是"两个 kernel 合为一个"——是<strong>数学上把 BN 参数折进 Conv 权重</strong>：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>原始：y = BN(Conv(x))
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>     = gamma * (Conv(x) - mean) / std + beta
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>     = gamma * (W*x + b - mean) / std + beta
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a>
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>折叠后：y = W_new * x + b_new
+<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a>  W_new = W * gamma / std
+<a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a>  b_new = (b - mean) / std * gamma + beta
+</code></pre></div>
+<p>结果：推理时一个 Conv 搞定，完全省掉 BN 的计算和内存访问。</p>
+<blockquote>
+<p><strong>只在推理时可做</strong>。训练时 BN 的 mean/std 每个 batch 都变（running statistics），无法提前折进权重。</p>
+</blockquote>
+<h4 id="group-batch">Group Batch 融合<a class="headerlink" href="#group-batch" title="Permanent link">&para;</a></h4>
+<p>多个独立小算子合并为一次批量执行：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>原始：
+<a id="__codelineno-21-2" name="__codelineno-21-2" href="#__codelineno-21-2"></a>  out_1 = linear(x_1, W_1)   # kernel launch 1
+<a id="__codelineno-21-3" name="__codelineno-21-3" href="#__codelineno-21-3"></a>  out_2 = linear(x_2, W_2)   # kernel launch 2
+<a id="__codelineno-21-4" name="__codelineno-21-4" href="#__codelineno-21-4"></a>  out_3 = linear(x_3, W_3)   # kernel launch 3
+<a id="__codelineno-21-5" name="__codelineno-21-5" href="#__codelineno-21-5"></a>  ...                         # N 次 launch
+<a id="__codelineno-21-6" name="__codelineno-21-6" href="#__codelineno-21-6"></a>
+<a id="__codelineno-21-7" name="__codelineno-21-7" href="#__codelineno-21-7"></a>融合后：
+<a id="__codelineno-21-8" name="__codelineno-21-8" href="#__codelineno-21-8"></a>  [out_1, out_2, ..., out_N] = batched_linear([x_1,...,x_N], [W_1,...,W_N])
+<a id="__codelineno-21-9" name="__codelineno-21-9" href="#__codelineno-21-9"></a>                              # 1 次 launch
+</code></pre></div>
+<p><strong>收益</strong>：
+- 1 次 launch 替代 N 次 launch（节省 launch overhead）
+- 大 batch 提高 GPU 利用率（单个小 GEMM 可能填不满 SM）</p>
+<h3 id="post-grad">第四部分：为什么 Post-grad 有三轮模式匹配？<a class="headerlink" href="#post-grad" title="Permanent link">&para;</a></h3>
+<p>不是"同一组模式跑三遍"——是"三组不同模式各跑一遍"：</p>
+<table>
+<thead>
+<tr>
+<th>轮次</th>
+<th>pass_patterns[i]</th>
+<th>内容</th>
+<th>为什么在这一轮</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>0</td>
+<td>pass_patterns[0]</td>
+<td>attention 相关模式</td>
+<td>最复杂、最高优先级，先清理</td>
+</tr>
+<tr>
+<td>1</td>
+<td>pass_patterns[1]</td>
+<td>matmul 相关模式</td>
+<td>依赖 attention 清理后的残余</td>
+</tr>
+<tr>
+<td>2</td>
+<td>pass_patterns[2]</td>
+<td>杂项模式</td>
+<td>其他零散优化</td>
+</tr>
+</tbody>
+</table>
+<p><strong>分组原因</strong>：
+1. <strong>依赖顺序</strong>：第 0 轮的替换可能暴露第 1 轮能匹配的新模式
+2. <strong>性能</strong>：避免无关模式互相干扰（attention 模式不需要和 matmul 模式竞争锚点）
+3. <strong>可维护性</strong>：每组模式独立维护、独立测试</p>
+<h3 id="silu-b">第五部分：SiLU 分解选择——为什么选方式 B<a class="headerlink" href="#silu-b" title="Permanent link">&para;</a></h3>
+<p>SiLU(x) = x * sigmoid(x)，分解有两种方式：</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-22-1" name="__codelineno-22-1" href="#__codelineno-22-1"></a>方式 A：x * sigmoid(x)
+<a id="__codelineno-22-2" name="__codelineno-22-2" href="#__codelineno-22-2"></a>  → mul(x, div(1, add(1, exp(neg(x)))))
+<a id="__codelineno-22-3" name="__codelineno-22-3" href="#__codelineno-22-3"></a>  节点：neg → exp → add(1,·) → div(1,·) → mul(x,·)
+<a id="__codelineno-22-4" name="__codelineno-22-4" href="#__codelineno-22-4"></a>
+<a id="__codelineno-22-5" name="__codelineno-22-5" href="#__codelineno-22-5"></a>方式 B：x / (1 + exp(-x))
+<a id="__codelineno-22-6" name="__codelineno-22-6" href="#__codelineno-22-6"></a>  → div(x, add(1, exp(neg(x))))
+<a id="__codelineno-22-7" name="__codelineno-22-7" href="#__codelineno-22-7"></a>  节点：neg → exp → add(1,·) → div(x,·)
+</code></pre></div>
+<p><strong>选 B 的原因</strong>：与 PyTorch eager 的 C++ 实现<strong>数值行为 bit-exact 一致</strong>。</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-23-1" name="__codelineno-23-1" href="#__codelineno-23-1"></a>方式 A 的 mul 最后一步：x * (1/(1+exp(-x)))
+<a id="__codelineno-23-2" name="__codelineno-23-2" href="#__codelineno-23-2"></a>方式 B 的 div 最后一步：x / (1+exp(-x))
+<a id="__codelineno-23-3" name="__codelineno-23-3" href="#__codelineno-23-3"></a>
+<a id="__codelineno-23-4" name="__codelineno-23-4" href="#__codelineno-23-4"></a>数学上等价，但浮点运算中 mul 和 div 的舍入行为不同。
+<a id="__codelineno-23-5" name="__codelineno-23-5" href="#__codelineno-23-5"></a>PyTorch eager 模式的 C++ kernel 用的是除法形式（方式 B）。
+</code></pre></div>
+<p><strong>Inductor 原则</strong>：编译结果必须和 eager 模式精确匹配（bit-exact）。用户不应该因为加了 <code>torch.compile</code> 就得到不同的数值结果。这是正确性的底线。</p>
+<hr />
+<h2 id="_9">多角度追问<a class="headerlink" href="#_9" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>[!question] XLA/Grappler 跟 FX Passes 是什么关系？
+<strong>Grappler ≈ FX Passes</strong>（图级优化器）：都是在高层图表示上做模式匹配、常量折叠、算子融合。
+<strong>XLA ≈ Inductor</strong>（编译器后端）：都是把优化后的图编译为可执行代码（XLA → HLO → LLVM IR → 机器码；Inductor → Loop IR → Triton/C++ → PTX/binary）。
+XLA 不是 TensorFlow 的一个 pass，而是一个完整的独立编译器。</p>
+<p>[!question] buffer 级别的 CSE 机会从哪来？
+<strong>Decomposition 后出现重复子表达式</strong>。例如 <code>layer_norm(x)</code> 分解后：
+<div class="highlight"><pre><span></span><code><a id="__codelineno-24-1" name="__codelineno-24-1" href="#__codelineno-24-1"></a>mean = x.mean(-1)
+<a id="__codelineno-24-2" name="__codelineno-24-2" href="#__codelineno-24-2"></a>var = ((x - mean)^2).mean(-1)     # 这里算了 x - mean
+<a id="__codelineno-24-3" name="__codelineno-24-3" href="#__codelineno-24-3"></a>out = (x - mean) / sqrt(var + eps) # 这里又算了 x - mean
+</code></pre></div>
+<code>x - mean</code> 被计算了两次。如果不做 CSE（或 Inlining + Fusion），这个重复子表达式会导致两次 HBM 读写。Inductor 的方案是通过闭包组合 + Inlining 让两个消费者共享同一次计算。</p>
+<p>[!question] 为什么 Attention 融合一定要在 FX Pass 做？
+Lowering 后，<code>matmul(Q, K^T)</code> 变成一个 per-index 的 lambda（循环级 IR），<code>softmax</code> 变成另一组 lambda。此时你看到的是几十个零散的 <code>load</code>/<code>store</code>/<code>exp</code>/<code>sum</code> 操作，再也看不出"这 4 个节点合起来是 Scaled Dot-Product Attention"。语义信息在 Lowering 时被永久碾碎了——所以<strong>只有在 FX Graph 层面才能识别并替换</strong>。</p>
+<p>[!question] 模式匹配有误匹配风险吗？
+<strong>有</strong>，所以需要多重防护：
+1. <strong>extra_check</strong>：注册模式时可附加自定义检查（如"Q 和 K 的最后一维必须相等"）
+2. <strong>FakeTensor 二次验证</strong>：用真实形状重新 trace，确认替换后语义等价
+3. <strong>单元测试覆盖</strong>：每个注册的模式都有对应的 test case，验证替换前后数值一致
+4. <strong>逆拓扑序保护</strong>：同一个节点不会被多个模式重复匹配（先匹配的先替换）</p>
+</blockquote>
+<hr />
+<h2 id="_10">与其他概念的关系<a class="headerlink" href="#_10" title="Permanent link">&para;</a></h2>
+<ul>
+<li>2026-07-09_inductor_phase_ordering — FX Passes 是六层管线的第三层（FX Passes 阶段），位于 Decomposition 之后、Lowering 之前</li>
+<li>2026-07-09_inductor_ir_design — FX Passes 操作的是 FX Graph（图结构），Lowering 后变为 Python 函数 IR（循环级闭包）</li>
+<li>2026-07-10_dynamo_tracing_mechanism — Dynamo 产出的 FX Graph 是 FX Passes 的输入；Dynamo 的忠实记录导致了 noop 等冗余</li>
+<li>2026-06-25_kernel_fission_fusion — FX Pass 做的是"语义级融合"（模式匹配识别高层模式），Scheduling 做的是"循环级融合"（依赖分析 + 内存复用）</li>
+</ul>
+<hr />
+<h2 id="_11">关键洞察<a class="headerlink" href="#_11" title="Permanent link">&para;</a></h2>
+<blockquote>
+<p>[!insight] FX Pass 能做的优化 = Lowering 之后就做不了的优化
+因为语义信息在 Lowering 后被碾碎。4 个 ATen 节点（matmul/scale/softmax/matmul）Lowering 后变成几十个 per-index 的 lambda 操作，再也无法识别"这是 SDPA"。所以所有需要高层语义的优化（Attention 融合、Conv-BN 权重折叠）必须在 FX Pass 阶段完成。</p>
+<p>[!insight] 模式匹配 + 算子分解 = 指令选择的 ML 特化版
+经典编译器的指令选择：先把高层操作展开为中间表示（暴露子结构），再从中选择最优机器指令组合。Inductor 的做法完全同构：Decomposition 先把复合算子展开为 Core ATen 基础操作（暴露子结构），PatternMatcherPass 再从中匹配出最优的高效实现（flash_attention、fused_conv_bn）。</p>
+<p>[!insight] 三阶段架构不是随意的——每个阶段需要不同的信息
+Pre-grad 需要完整图（Conv-BN 融合需看到 BN 的 running statistics，这些在反向分离后会丢失）；Joint 需要标准化表示（SDPA 模式匹配需要统一的 ATen 方言）；Post-grad 需要精确形状（模式匹配的二次验证需要 FakeTensor 提供的精确 shape/dtype）。信息可用性决定了优化的阶段归属。</p>
+</blockquote>
+<hr />
+<h2 id="_12">参考文献<a class="headerlink" href="#_12" title="Permanent link">&para;</a></h2>
+<ul>
+<li>PyTorch 2 论文 Section 4.1-4.2（FX Graph Optimizations）</li>
+<li>EaC3 Ch.8 "Introduction to Optimization"、Ch.9 "Loop Optimizations"、Ch.10 "Instruction Selection"</li>
+<li>Inductor Overview §4.2 (FX 图优化)</li>
+<li>Phase 2: FX Optimization 教程 (skeleton_tutorial/phase2_fx_optimization.md)</li>
+</ul>
+
+
+
+
+
+
+
+  
+  
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  回到页面顶部
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+    
+      
+      <nav class="md-footer__inner md-grid" aria-label="页脚" >
+        
+          
+          <a href="../2026-06-22_megakernel_vs_unfused/" class="md-footer__link md-footer__link--prev" aria-label="上一页: Megakernel vs Unfused — 为什么 GPU 推理优化不能迷信&#34;大融合&#34;">
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+            </div>
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                上一页
+              </span>
+              <div class="md-ellipsis">
+                Megakernel vs Unfused — 为什么 GPU 推理优化不能迷信"大融合"
+              </div>
+            </div>
+          </a>
+        
+        
+          
+          <a href="../2026-07-09_inductor_ir_design/" class="md-footer__link md-footer__link--next" aria-label="下一页: Inductor IR 设计精髓 — Define-by-Run、闭包组合、V.ops 虚拟化">
+            <div class="md-footer__title">
+              <span class="md-footer__direction">
+                下一页
+              </span>
+              <div class="md-ellipsis">
+                Inductor IR 设计精髓 — Define-by-Run、闭包组合、V.ops 虚拟化
+              </div>
+            </div>
+            <div class="md-footer__button md-icon">
+              
+              <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M4 11v2h12l-5.5 5.5 1.42 1.42L19.84 12l-7.92-7.92L10.5 5.5 16 11z"/></svg>
+            </div>
+          </a>
+        
+      </nav>
+    
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+    <div class="md-copyright__highlight">
+      Copyright &copy; 2026 DragonFive
+    </div>
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.top", "navigation.footer", "search.highlight", "search.share", "content.code.copy"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "\u5df2\u590d\u5236", "clipboard.copy": "\u590d\u5236", "search.result.more.one": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.more.other": "\u5728\u8be5\u9875\u4e0a\u8fd8\u6709 # \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.none": "\u6ca1\u6709\u627e\u5230\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.one": "\u627e\u5230 1 \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.other": "# \u4e2a\u7b26\u5408\u6761\u4ef6\u7684\u7ed3\u679c", "search.result.placeholder": "\u952e\u5165\u4ee5\u5f00\u59cb\u641c\u7d22", "search.result.term.missing": "\u7f3a\u5c11", "select.version": "\u9009\u62e9\u5f53\u524d\u7248\u672c"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
