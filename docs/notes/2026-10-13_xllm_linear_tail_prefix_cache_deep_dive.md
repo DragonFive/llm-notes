@@ -1,5 +1,5 @@
 ---
-title: 深入解析 linear tail prefix cache（四代教学书结算·v2 精编版）
+title: 深入解析 linear tail prefix cache
 date: 2026-10-13
 tags:
   - type/synthesis
@@ -11,45 +11,42 @@ tags:
   - topic/mtp
 ---
 
-# 深入解析 linear tail prefix cache（四代教学书结算·v2 精编版）
+深入解析 linear tail prefix cache
 
-> **结算来源**：四代教学书（round1 2487 / round2 3968 / round3 2902 / round4 1262 行，共 **10,619 行**）+ findings.md 审查轨（254 行）+ 本会话 4 轮追问讨论（含 10-12/10-13 两轮大追问）。
-> **核验基准**：head `commit-4`（base `base-commit`，4 commits，34 文件 +1436/−277）。数值约定：KV 逻辑块 = hash 粒度 = **128**，LINEAR 检查点步距 chunk_stride = **8192**；hash 下标 0 基（8064/128−1=**62**）。
-> **与 vllm-sglang 深潜笔记 的关系**：姊妹篇——本卷教 xLLM 侧（本 MR），彼卷教参照系两主角；三方对照表两卷各有一份互为镜像。
+## 总览：这是什么，为什么值得读
 
-## 本版说明：为什么有 v2
+**一句话身份**：这份笔记深潜解析本 MR（xLLM 仓库，head `commit-4`，4 commits，34 文件 +1436/−277）——它给 GLM-5.3 系 GDN linear attention 的线性状态补上了 prefix cache 能力。
 
-本笔记 v1（345 行）与 vllm-sglang 卷 v1 同期产出、同病（索引文体：结论表多、贴码少、教学脚手架丢失）。按 v2 精编流程重做，但**原料不同**：四本教学书已在 v1 结算时删除（v1 纪律"吸收即删"——正是 v2 改掉的那条），所以 v2 的写作原料是三样：
+**解决的问题**：linear 状态与 KV cache 是两种东西——KV cache 天然按块可复用，而 linear 状态原本「只能整段恢复」：prompt 长度只要不落在检查点边界上，前面算好的状态全部作废重算。本 MR 在 HBM → host 内存 → Mooncake Store **每一个物理层级钉死同一套「可恢复边界 + 边界键」**，把 8191 这类不对齐 prompt 的前缀复用深度从 0 提到 8064（98.5%）。
 
-- ① v1 笔记（345 行，作事实底料与线索）
-- ② 历史讨论原文恢复
-- ③ **xLLM 源码四 commit 链直读**（每处 file:line 回 `git show commit-4` 核验、贴码重新摘录——深潜层实际是"从源码重教的 本 MR"，不是原书的排版修复）
+**TL;DR（五章 = 五个台阶）**：
+1. 一切机制的地基是一个 15 行的纯函数（第一章）：双排除规则 + tail 点查不截尾；
+2. 复用的单位由「两把尺子」决定（第二章）：token 数 → 链上下标，KV 逻辑块 = hash 粒度 = 128，检查点步距 = 8192；
+3. 运行时靠「账本四动作」维护状态（第三章）：mount / take / erase / replace + tail 便签；
+4. 前缀复用真正发生在准入 probe（第四章）：gap-tolerant 查找 + 按块回退 + 发布守卫；
+5. 边界键跨三层存储下沉（第五章）：配对下沉、盖键、EXPLICIT 发布——总览里「每一层级同一套边界」的完整实现。
 
-流水线：2A 五写手分章深潜 → 2B 冷读验收四问硬门（复述/零跳步跟算/先教后用/版面可扫读；Ch1 一轮打回重写后二轮过门，Ch2-5 PASS+缺陷修复轮）→ 2C 合并。**v2 重做修正 v1 十处**（登记于 §索六 v2 修正表），最重要的三处：游标虚高 k 恒 1 错位恒 128（v1 的 k=3/16448 回验不成立）、TailMismatch 例真失败在 trim 不在 find、MtpBlockHasher 在 本 MR 谱系 base/head 都在。
+> **姊妹篇**：vllm-sglang 深潜笔记 教参照系两主角（vLLM/SGLang 的缓存组织）；本卷教 xLLM 侧。三方对照表两卷各有一份、互为镜像。
 
-**两层产物**：深潜层五章（教学级，3,556 行 ≈ 原书 33%——目标读者=半年后没读过书的你）+ 索引层（§索一~§索九，结论级速查）。
+**阅读路线**：全书自底向上——数学（第一章）→ 键空间（第二章）→ 运行时账本（第三章）→ 准入与发布（第四章）→ 三层存储（第五章），每章开头有「承上启下」一段串起弧线。只想快速理解 MR 干了什么：读本总览 + 第一章 §1.1-1.2 + 索引层 §索一。带着具体困惑来：§索七「追问精华」按你的原话困惑索引到对应章节。
 
 ## 目录
 
+- **总览**：这是什么，为什么值得读
 - **深潜层**
   - 第一章 · tail 检查点数学：纯函数、双排除与恢复边界
   - 第二章 · 键空间：两把尺子、域桶与 MTP lookahead 的物理本质
   - 第三章 · 账本四动作与双账统一：mount/take/erase/replace 和 tail 便签
   - 第四章 · 准入 probe 与发布流水线：gap-tolerant 查找、按块回退与发布守卫
   - 第五章 · 三层存储与 D2H 事务：配对下沉、盖键与 EXPLICIT 发布
-- **索引层**
-  - §索一 MR 总览与作者意图
-  - §索二 设计评价汇总
-  - §索三 三方对照
-  - §索四 Review findings
-  - §索五 学术脉络
-  - §索六 教学演化与勘误链 + v2 修正登记
-  - §索七 追问精华
-  - §索八 手算示例总表
-  - §索九 来源与处置
+- **索引层**（结论级速查）：§索一 MR 总览与作者意图 / §索二 设计评价汇总 / §索三 三方对照 / §索四 Review findings / §索五 学术脉络 / §索六 教学演化与勘误链 / §索七 追问精华 / §索八 手算示例总表 / §索九 来源与处置
+- **附录**：结算与版本记录（从卷首迁来）
 
 ---
+
 # 第一章 · tail 检查点数学：纯函数、双排除与恢复边界
+
+> 🔗 **承上启下**：总览说 本 MR 钉死「可恢复边界」——边界由什么决定？本章拆出那个 15 行的纯函数：双排除规则各防一件什么事、探测口径差（match 截尾、tail 点查不截）、8064 为什么站在 0 与 8192 之间。**全书的数学地基在这一章**。
 
 > **核验基准**：本 MR，head `commit-4`（base `base-commit`）。本章所有代码均用 `git show commit-4:<path>` 重新摘录，行号即该提交行号，逐块回读核验。
 > **数值约定**：KV 逻辑块 = hash 粒度 = **128** token；LINEAR 常规检查点步距 = **8192** token。本章手算全部用这两个数。
@@ -799,6 +796,8 @@ prompt=16383（逻辑块 256 口径）→ ⌊16383/256⌋×256 = 63×256 = 16128
 
 
 # 第二章 · 键空间：两把尺子、域桶与 MTP lookahead 的物理本质
+
+> 🔗 **承上启下**：上一章定了「边界在哪」，本章回答「边界怎么变成键」：两把尺子（边界 token 数 → 链上下标）、域桶（为什么固定值还要分桶）、MTP lookahead = end+1 的物理本质。**缓存复用的单位由这章定死**（块 128 / 步距 8192）。
 
 > 本章对应事实底料 §三。核验基准：本 MR head `commit-4`（base `base-commit`）。
 > 所有代码经 `git show commit-4:<path>` 逐行回读核验；行号以该 commit 为准。
@@ -1579,6 +1578,8 @@ for (auto& [hasher_type, strides] : block_hashes_by_domain_) {
 
 # 第三章 · 账本四动作与双账统一：mount/take/erase/replace 和 tail 便签
 
+> 🔗 **承上启下**：有了边界和键，还需要有人记账。本章讲账本怎么动：mount / take / erase / replace 四动作 + tail 便签，把前两章的数学和键落到运行时的状态迁移——一个序列怎么记账、账本怎么动、账随序列怎么死。
+
 > 源码基准：commit `commit-4`。本章所有 `file:line` 均已用 `git show commit-4:<path>` 逐行回读核验。
 > 数值约定：KV 逻辑块 = hash 粒度 = **128 token**；LINEAR 常规检查点步距 chunk_stride = **8192 token**。下标一律 0 基（第 0 号、第 1 号……），凡 1 基语义（"前 k 个"）显式注明。
 
@@ -2328,6 +2329,8 @@ tail 分支同理：便签的消费者是 `:430-431` 的幂等守卫 `kv_state.l
 
 # 第四章 · 准入 probe 与发布流水线：gap-tolerant 查找、按块回退与发布守卫
 
+> 🔗 **承上启下**：账本之上是准入：新请求来了怎么查（gap-tolerant，容忍中间的洞）、查不到怎么按块回退、查到了怎么发布（发布守卫）。**前缀复用真正发生的时刻在第四章**——前面三章的机制都是为这一刻服务的。
+
 > 本章对应 factbase §五（发布与准入）。核验基准：head `commit-4`，所有代码引用均已用 `git show commit-4:<path>` 逐行回读。
 > 数值约定：KV 逻辑块 = hash 粒度 = **128** token；LINEAR 检查点步距 chunk_stride = **8192** token；hash 下标 0 基（8064/128−1 = **62**，链上共 63 格，下标 0..62）。
 
@@ -2984,6 +2987,8 @@ block_manager_test.cpp:826-859（TailMismatchFallsBackToShorterRegularLinearChec
 
 
 # 第五章 · 三层存储与 D2H 事务：配对下沉、盖键与 EXPLICIT 发布
+
+> 🔗 **承上启下**：最后一块拼图：这些边界键在 HBM → host → Mooncake 三层之间怎么下沉（配对下沉）、怎么防止旧键冒充新状态（盖键）、怎么显式发布（EXPLICIT）。总览里「每一个物理层级钉同一套边界」的完整实现在本章闭环。
 
 > 核验基准：commit `commit-4`（本 MR head）。所有行号均对该 commit 用 `git show` 逐段回读核验。
 > 简写约定：`hierarchy.cpp` = xllm/core/framework/block/hierarchy_block_manager_pool.cpp；`linear.cpp` = xllm/core/framework/block/linear_state_block_manager.cpp；`composite` = xllm/core/framework/block/composite_block_manager.{h,cpp}；`bmi` = xllm/core/framework/block/block_manager_impl.cpp；`pc` = xllm/core/framework/prefix_cache/prefix_cache.cpp；`skvs` = xllm/core/framework/request/sequence_kv_state.cpp；`test` = tests/core/framework/block/hierarchy_block_manager_pool_test.cpp。
@@ -3677,7 +3682,7 @@ if (probe.logical_token_count != 0) {
 
 ## §索五 学术脉络
 
-**dengyingxu1 的 linear-state prefix cache 血脉**（GitHub PR 时代 #1799（hash 原语）/#1802（选项）/#1846（block manager+prefix cache——`linear_state_hashes_` 独立链在此出生，本 MR 将其杀死）/#1940（恢复+容量）/#1947（batch+scheduler）/#1956（引擎接线）→#1979 VLM 启用+chunk-stride clamp→**#2161**（prefix-cache prefill attention 的 Python graph 路径修复——正是 glm5_next 唯一走的 TORCH 组图路径）→#2163；内部平台另有去 MTP 冗余省显存与本 MR 键域重做两步。设计笔记站 yingxudeng.github.io/xllm-notes：qwen35 原型、尾块缓存笔记（commit 29b510a8e）、ReplaySSM ring 审查。
+**组内同学 的 linear-state prefix cache 血脉**（GitHub PR 时代 #1799（hash 原语）/#1802（选项）/#1846（block manager+prefix cache——`linear_state_hashes_` 独立链在此出生，本 MR 将其杀死）/#1940（恢复+容量）/#1947（batch+scheduler）/#1956（引擎接线）→#1979 VLM 启用+chunk-stride clamp→**#2161**（prefix-cache prefill attention 的 Python graph 路径修复——正是 glm5_next 唯一走的 TORCH 组图路径）→#2163；内部平台另有去 MTP 冗余省显存与本 MR 键域重做两步。其公开设计笔记：qwen35 原型、尾块缓存笔记（commit 29b510a8e）、ReplaySSM ring 审查。
 
 **论文参照**（作者公开材料未引论文，两候选）：**SuffixReplay**（arXiv:2609.33477，TeleAI——重放派，不存检查点、留 anchor 重放近期后缀做近似重建；与 本 MR 检查点派相反；时间与问题意识高度吻合）；**Marconi**（arXiv:2411.19379，混合 LLM 前缀缓存开山，Bloom 准入）。SuffixReplay 称 SGLang 默认 8192 网格与当前 main 代码不一致 [待验证]。
 
@@ -3787,3 +3792,26 @@ if (probe.logical_token_count != 0) {
 | 四轮用户原话 | §索七 + 各章用户引子 | 全承接 |
 
 **诚实声明**：①四本教学书在 v1 结算时已删（v1 纪律），v2 深潜层**不从书重排**而是从源码重教——教学编排（手算中间态/失败画面）为重建，事实与数字以 v1 笔记为线索、以源码核验为准（冲突按源码改，登记 §索六）；②冷读验收：五章全 PASS（Ch1 经一轮重写）；③v1 版保留在 git 历史，其"游标 k=3/16448""MtpBlockHasher 只在 base""E 例 tail 键查不到"等表述作废；④遗留 [待验证]（不承重，正文就地标注）：dp_rank0 同构前提、测试数复跑、SGLang 8192 网格、vLLM partial tail、撞键掉速幅度、三方复用深度推演、兄弟分支废弃状态、Ch5 worker 张量分片切法、D2H 失败无重试；⑤结算工作区待用户确认后清理。
+
+---
+
+## 附录：结算与版本记录（从卷首迁来）
+
+> **结算来源**：四代教学书（round1 2487 / round2 3968 / round3 2902 / round4 1262 行，共 **10,619 行**）+ findings.md 审查轨（254 行）+ 本会话 4 轮追问讨论（含 10-12/10-13 两轮大追问）。
+> **核验基准**：head `commit-4`（base `base-commit`，4 commits，34 文件 +1436/−277）。数值约定：KV 逻辑块 = hash 粒度 = **128**，LINEAR 检查点步距 chunk_stride = **8192**；hash 下标 0 基（8064/128−1=**62**）。
+
+## 本版说明：为什么有 v2
+
+本笔记 v1（345 行）与 vllm-sglang 卷 v1 同期产出、同病（索引文体：结论表多、贴码少、教学脚手架丢失）。按 v2 精编流程重做，但**原料不同**：四本教学书已在 v1 结算时删除（v1 纪律"吸收即删"——正是 v2 改掉的那条），所以 v2 的写作原料是三样：
+
+- ① v1 笔记（345 行，作事实底料与线索）
+- ② 历史讨论原文恢复
+- ③ **xLLM 源码四 commit 链直读**（每处 file:line 回 `git show commit-4` 核验、贴码重新摘录——深潜层实际是"从源码重教的 本 MR"，不是原书的排版修复）
+
+流水线：2A 五写手分章深潜 → 2B 冷读验收四问硬门（复述/零跳步跟算/先教后用/版面可扫读；Ch1 一轮打回重写后二轮过门，Ch2-5 PASS+缺陷修复轮）→ 2C 合并。**v2 重做修正 v1 十处**（登记于 §索六 v2 修正表），最重要的三处：游标虚高 k 恒 1 错位恒 128（v1 的 k=3/16448 回验不成立）、TailMismatch 例真失败在 trim 不在 find、MtpBlockHasher 在 本 MR 谱系 base/head 都在。
+
+**两层产物**：深潜层五章（教学级，3,556 行 ≈ 原书 33%——目标读者=半年后没读过书的你）+ 索引层（§索一~§索九，结论级速查）。
+
+
+
+> 新增卷首总览（冷启动入口）与各章「承上启下」过渡段；原卷首「本版说明/结算来源」（生产过程元叙事）迁至本附录；标题去掉生产元信息。治 v2 实测问题：冷读者打开笔记不知道这是什么、章序无弧线无过渡。

@@ -225,6 +225,8 @@ def write_index(repo: Path, items: list) -> None:
         lines.append(f"- [{title}](notes/{slug})")
     lines += [
         "",
+        "- **方法**：内容出自我主导的深度评审与教学流水线——勘探定界、分章深潜、冷读验收、勘误裁决，每个数字都经源码核验。",
+        "",
         "> 持续更新中。本站只收录纯通用技术篇；涉及内部工程细节的笔记不在范围。",
         "",
         "<!-- 本文件由 tools/export.py 生成，请勿手改 -->",
