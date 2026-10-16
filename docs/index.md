@@ -21,8 +21,8 @@
 - [GEMM+AR 融合与 multimem 通信深潜](notes/2026-07-07_gemm_ar_multimem_deep_dive.md)
 - [Inductor IR 设计精髓 — Define-by-Run、闭包组合、V.ops 虚拟化](notes/2026-07-09_inductor_ir_design.md)
 - [Inductor FX Passes — Lowering 之前的图级优化全景](notes/2026-07-12_inductor_fx_passes.md)
-- [SfaDcp:GLM-5.3-Flash decode KV 分条注意力三轮教学结算](notes/2026-10-10_xllm_sfadcp_dcp_decode_attention_deep_dive.md)
-- [深入解析 linear tail prefix cache（四代教学书结算）](notes/2026-10-13_xllm_linear_tail_prefix_cache_deep_dive.md)
+- [SfaDcp:GLM-5.3-Flash decode KV 分条注意力(三轮教学结算 · v2 深潜重建)](notes/2026-10-10_xllm_sfadcp_dcp_decode_attention_deep_dive.md)
+- [深入解析 linear tail prefix cache（四代教学书结算·v2 精编版）](notes/2026-10-13_xllm_linear_tail_prefix_cache_deep_dive.md)
 
 > 持续更新中。本站只收录纯通用技术篇；涉及内部工程细节的笔记不在范围。
 
