@@ -207,7 +207,65 @@ def copy_assets(text: str, src_file: Path, vault: Path, repo: Path) -> int:
     return copied
 
 
+# 分类体系（2026-10-16 用户需求：首页分类呈现 + 最新在前）。
+# 从源笔记 frontmatter 的 tags 驱动，按 CATEGORIES 顺序首匹配归类，无匹配落「其他」。
+# 扩展：加新类目就加一行 (显示名, [匹配 tags])；想改优先级就调顺序。
+CATEGORIES = [
+    ("推理系统与分布式并行", [
+        "topic/contextparallel", "topic/kvsplit", "topic/kvcache",
+        "topic/pddisagg", "topic/prefix-cache", "topic/linear-attention",
+        "topic/mtp", "topic/attention", "domain/systems",
+    ]),
+    ("GPU Kernel 与指令级", [
+        "topic/gpukernel", "topic/cuda", "topic/gemm",
+    ]),
+    ("编译器与图优化", [
+        "topic/compiler", "topic/optimization",
+    ]),
+]
+FALLBACK_CATEGORY = "其他"
+
+
+def extract_tags(text: str) -> list:
+    """frontmatter tags → ['topic/xxx', ...]；兼容块格式与行内数组格式。"""
+    tags = []
+    if not text.startswith("---"):
+        return tags
+    end = text.find("\n---", 3)
+    if end < 0:
+        return tags
+    in_tags = False
+    for line in text[3:end].splitlines():
+        s = line.strip()
+        if s.startswith("tags:"):
+            in_tags = True
+            inline = s[5:].strip()
+            if inline.startswith("["):   # 行内数组：tags: [a, b, c]
+                tags += [t.strip().strip("'\"") for t in inline.strip("[]").split(",") if t.strip()]
+                in_tags = False
+            continue
+        if in_tags:
+            if s.startswith("- "):
+                tags.append(s[2:].strip().strip("'\""))
+            elif s:
+                in_tags = False
+    return tags
+
+
+def categorize(tags: list) -> str:
+    # 归一化连字符（topic/gpu-kernel 与 topic/gpukernel 视为同一标签）
+    norm = {t.replace("-", "") for t in tags}
+    for cat_name, cat_tags in CATEGORIES:
+        if any(ct.replace("-", "") in norm for ct in cat_tags):
+            return cat_name
+    return FALLBACK_CATEGORY
+
+
 def write_index(repo: Path, items: list) -> None:
+    # items: [(title, slug, category)]；类内按 slug 倒序 = 最新在前（slug 前缀是日期）
+    by_cat = {}
+    for title, slug, cat in items:
+        by_cat.setdefault(cat, []).append((title, slug))
     lines = [
         "# LLM Notes",
         "",
@@ -218,13 +276,21 @@ def write_index(repo: Path, items: list) -> None:
         "- **构建**：MkDocs-Material，GitHub Actions 推送后自动构建发布。",
         "- **原则**：Markdown 是 source of truth，HTML 只是派生的阅读层。",
         "",
-        f"## 笔记索引（{len(items)} 篇）",
+        f"## 笔记索引（{len(items)} 篇，类内最新在前）",
         "",
     ]
-    for title, slug in items:
-        lines.append(f"- [{title}](notes/{slug})")
+    cat_order = [c for c, _ in CATEGORIES] + ([FALLBACK_CATEGORY] if FALLBACK_CATEGORY in by_cat else [])
+    for cat in cat_order:
+        if cat not in by_cat:
+            continue
+        lines.append(f"### {cat}")
+        lines.append("")
+        for title, slug in sorted(by_cat[cat], key=lambda x: x[1], reverse=True):
+            date = slug[:10] if slug[:4].isdigit() else ""
+            suffix = f" `{date}`" if date else ""
+            lines.append(f"- [{title}](notes/{slug}){suffix}")
+        lines.append("")
     lines += [
-        "",
         "- **方法**：内容出自我主导的深度评审与教学流水线——勘探定界、分章深潜、冷读验收、勘误裁决，每个数字都经源码核验。",
         "",
         "> 持续更新中。本站只收录纯通用技术篇；涉及内部工程细节的笔记不在范围。",
@@ -241,10 +307,18 @@ def write_nav(repo: Path, items: list) -> None:
         fail(f"mkdocs.yml 缺少 {NAV_BEGIN.strip()} / {NAV_END.strip()} 标记")
     head, rest = cfg.split(NAV_BEGIN, 1)
     _, tail = rest.split(NAV_END, 1)
-    block = [NAV_BEGIN, "  - 笔记:"]
-    for title, slug in items:
-        safe = title.replace("\\", "\\\\").replace('"', '\\"')   # YAML 双引号标量，防冒号/引号破坏
-        block.append(f'      - "{safe}": notes/{slug}')
+    by_cat = {}
+    for title, slug, cat in items:
+        by_cat.setdefault(cat, []).append((title, slug))
+    block = [NAV_BEGIN]
+    cat_order = [c for c, _ in CATEGORIES] + ([FALLBACK_CATEGORY] if FALLBACK_CATEGORY in by_cat else [])
+    for cat in cat_order:
+        if cat not in by_cat:
+            continue
+        block.append(f"  - {cat}:")
+        for title, slug in sorted(by_cat[cat], key=lambda x: x[1], reverse=True):
+            safe = title.replace("\\", "\\\\").replace('"', '\\"')   # YAML 双引号标量，防冒号/引号破坏
+            block.append(f'      - "{safe}": notes/{slug}')
     block.append(NAV_END)
     cfg_path.write_text(head + "\n".join(block) + tail, encoding="utf-8")
 
@@ -285,7 +359,7 @@ def main() -> None:
         if not args.check:
             (docs_notes / slug).write_text(converted, encoding="utf-8")
             copied_assets += copy_assets(converted, src, vault, repo)
-        items.append((title, slug))
+        items.append((title, slug, categorize(extract_tags(raw))))
 
     if all_hits:
         print("❌ 敏感词命中，导出中止（可在私有 vault 的 .publish-redactions/<笔记名>.json 写脱敏规则后重试）：", file=sys.stderr)
@@ -295,7 +369,7 @@ def main() -> None:
         sys.exit(1)
 
     if not args.check:
-        items.sort(key=lambda x: x[1])
+        # 排序在各 write_* 内按分类做（类内 slug 倒序 = 最新在前）
         write_index(repo, items)
         write_nav(repo, items)
 

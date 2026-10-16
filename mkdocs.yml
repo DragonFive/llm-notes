@@ -42,18 +42,22 @@ markdown_extensions:
 nav:
   - 首页: index.md
   # BEGIN GENERATED NAV
-  - 笔记:
-      - "Megakernel vs Unfused — 为什么 GPU 推理优化不能迷信\"大融合\"": notes/2026-06-22_megakernel_vs_unfused.md
-      - "PDL vs CUDA Graph vs Piecewise CUDA Graph — LLM 推理 kernel launch overhead 优化全景": notes/2026-06-22_pdl_vs_cudagraph.md
-      - "Fusion / Tiling / Layout 三元组": notes/2026-06-23_fusion_tiling_layout.md
-      - "PyTorch 编译栈与 Lowering 层次映射": notes/2026-06-23_pytorch_compiler_stack.md
-      - "GPU 调度深潜：TBS、Warp Scheduler 与延迟隐藏的完整拆解": notes/2026-06-24_gpu_scheduling_deep_dive.md
-      - "Warp Scheduler 硬件架构全解析": notes/2026-06-25_warp_scheduler_deep_dive.md
-      - "指令调度代际跃迁：从同步锁资源到异步发令枪": notes/2026-06-29_async_instruction_scheduling.md
-      - "WGMMA Hopper GEMM 完整讲解": notes/2026-07-02_wgmma_hopper_gemm.md
-      - "Tensor Core PTX 指令管线全拆解": notes/2026-07-04_tensor_core_ptx_pipeline.md
-      - "MMA 指令深潜：线程分配、Fragment Layout 与数据流": notes/2026-07-06_mma-instruction-deep-dive.md
+  - 推理系统与分布式并行:
+      - "深入解析 linear tail prefix cache": notes/2026-10-13_xllm_linear_tail_prefix_cache_deep_dive.md
+      - "SfaDcp:decode KV 分条注意力深潜": notes/2026-10-10_xllm_sfadcp_dcp_decode_attention_deep_dive.md
+  - GPU Kernel 与指令级:
       - "GEMM+AR 融合与 multimem 通信深潜": notes/2026-07-07_gemm_ar_multimem_deep_dive.md
-      - "Inductor IR 设计精髓 — Define-by-Run、闭包组合、V.ops 虚拟化": notes/2026-07-09_inductor_ir_design.md
+      - "MMA 指令深潜：线程分配、Fragment Layout 与数据流": notes/2026-07-06_mma-instruction-deep-dive.md
+      - "Tensor Core PTX 指令管线全拆解": notes/2026-07-04_tensor_core_ptx_pipeline.md
+      - "WGMMA Hopper GEMM 完整讲解": notes/2026-07-02_wgmma_hopper_gemm.md
+      - "指令调度代际跃迁：从同步锁资源到异步发令枪": notes/2026-06-29_async_instruction_scheduling.md
+      - "Warp Scheduler 硬件架构全解析": notes/2026-06-25_warp_scheduler_deep_dive.md
+      - "GPU 调度深潜：TBS、Warp Scheduler 与延迟隐藏的完整拆解": notes/2026-06-24_gpu_scheduling_deep_dive.md
+      - "PyTorch 编译栈与 Lowering 层次映射": notes/2026-06-23_pytorch_compiler_stack.md
+      - "Fusion / Tiling / Layout 三元组": notes/2026-06-23_fusion_tiling_layout.md
+      - "PDL vs CUDA Graph vs Piecewise CUDA Graph — LLM 推理 kernel launch overhead 优化全景": notes/2026-06-22_pdl_vs_cudagraph.md
+      - "Megakernel vs Unfused — 为什么 GPU 推理优化不能迷信\"大融合\"": notes/2026-06-22_megakernel_vs_unfused.md
+  - 编译器与图优化:
       - "Inductor FX Passes — Lowering 之前的图级优化全景": notes/2026-07-12_inductor_fx_passes.md
+      - "Inductor IR 设计精髓 — Define-by-Run、闭包组合、V.ops 虚拟化": notes/2026-07-09_inductor_ir_design.md
   # END GENERATED NAV

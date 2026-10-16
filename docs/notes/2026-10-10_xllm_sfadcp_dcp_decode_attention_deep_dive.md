@@ -1,5 +1,5 @@
 ---
-title: SfaDcp:GLM-5.3-Flash decode KV 分条注意力(三轮教学结算 · v2 深潜重建)
+title: SfaDcp:decode KV 分条注意力深潜
 date: 2026-10-10
 updated: 2026-10-16
 tags:
@@ -17,7 +17,7 @@ status: stable
 difficulty: advanced
 ---
 
-# SfaDcp:GLM-5.3-Flash decode KV 分条注意力(三轮教学结算 · v2 深潜重建)
+# SfaDcp:decode KV 分条注意力深潜
 
 > **一句话**:SfaDcpAttentionBackend 让 dcp 组内每个 rank 只存 KV latent 的 1/kv_split 条带,靠"广播小小的 query、寄回部分输出、LSE 精确合并"买回全量注意力——**KV 从不跨 rank 移动,INDEX 全量复制让"去哪找"零通信**。
 
