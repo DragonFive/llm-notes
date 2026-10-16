@@ -275,6 +275,7 @@ def write_index(repo: Path, items: list) -> None:
         "（What you see is a curated export, not the working vault）。",
         "- **构建**：MkDocs-Material，GitHub Actions 推送后自动构建发布。",
         "- **原则**：Markdown 是 source of truth，HTML 只是派生的阅读层。",
+        "- **方法**：笔记以源码为证据底座（file:line 锚点 + 可复算的手算数字）；新作经我主导的教学流水线产出——勘探定界、分章深潜、冷读验收、勘误裁决。",
         "",
         f"## 笔记索引（{len(items)} 篇，类内最新在前）",
         "",
@@ -291,7 +292,6 @@ def write_index(repo: Path, items: list) -> None:
             lines.append(f"- [{title}](notes/{slug}){suffix}")
         lines.append("")
     lines += [
-        "- **方法**：笔记以源码为证据底座（file:line 锚点 + 可复算的手算数字）；新作经我主导的教学流水线产出——勘探定界、分章深潜、冷读验收、勘误裁决。",
         "",
         "> 持续更新中。本站只收录纯通用技术篇；涉及内部工程细节的笔记不在范围。",
         "",
